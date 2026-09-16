@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from letterboxd_utility_tools.core.errors import EmptyDatabaseError, NoResultError
-from letterboxd_utility_tools.core.plugins.discovery import random_watchlist_pick
+from projectsummer.core.errors import EmptyDatabaseError, NoResultError
+from projectsummer.core.plugins.discovery import random_watchlist_pick
 
 WATCHLIST_TITLES = {"The Shining", "Shutter Island", "The Others", "Alien"}
 

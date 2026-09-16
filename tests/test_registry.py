@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from letterboxd_utility_tools.core import registry
+from projectsummer.core import registry
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +95,7 @@ def test_discover_finds_builtin_plugins():
 
 def test_discover_loads_an_external_directory(tmp_path):
     (tmp_path / "contrib.py").write_text(
-        "from letterboxd_utility_tools.core.registry import plugin\n"
+        "from projectsummer.core.registry import plugin\n"
         "\n"
         "@plugin(category='contrib')\n"
         "def hello(name: str = 'world') -> str:\n"
@@ -118,7 +118,7 @@ def test_discover_is_repeatable():
 
 def test_discover_reloads_external_directory_without_clashing(tmp_path):
     (tmp_path / "contrib.py").write_text(
-        "from letterboxd_utility_tools.core.registry import plugin\n"
+        "from projectsummer.core.registry import plugin\n"
         "\n"
         "@plugin(category='contrib')\n"
         "def hello(name: str = 'world') -> str:\n"
@@ -136,7 +136,7 @@ def test_discover_reloads_external_directory_without_clashing(tmp_path):
 
 def _write_plugin(directory, filename, func_name, returns):
     (directory / filename).write_text(
-        f"from letterboxd_utility_tools.core.registry import plugin\n"
+        f"from projectsummer.core.registry import plugin\n"
         f"\n"
         f"@plugin(category='contrib')\n"
         f"def {func_name}() -> str:\n"

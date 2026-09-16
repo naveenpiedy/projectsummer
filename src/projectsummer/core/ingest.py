@@ -31,8 +31,8 @@ from typing import Any
 
 import duckdb
 
-from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.errors import LetterboxdError
+from projectsummer.core import db
+from projectsummer.core.errors import LetterboxdError
 
 #: Film-scoped exports: (source label, path within the export, has a Rating column).
 _FILM_SOURCES: tuple[tuple[str, str, bool], ...] = (

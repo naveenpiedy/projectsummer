@@ -6,9 +6,9 @@ from typing import Any
 
 import duckdb
 
-from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.errors import LetterboxdError
-from letterboxd_utility_tools.core.registry import plugin
+from projectsummer.core import db
+from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.registry import plugin
 
 
 class UnavailableError(LetterboxdError):

@@ -22,9 +22,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from letterboxd_utility_tools.core import db, registry
-from letterboxd_utility_tools.core.errors import LetterboxdError, NoDatabaseError
-from letterboxd_utility_tools.core.registry import Plugin
+from projectsummer.core import db, registry
+from projectsummer.core.errors import LetterboxdError, NoDatabaseError
+from projectsummer.core.registry import Plugin
 
 #: Parameter name used internally for the --json flag. Underscore-prefixed so
 #: it cannot collide with a plugin's own parameter.

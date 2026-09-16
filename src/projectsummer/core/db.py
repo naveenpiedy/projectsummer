@@ -18,8 +18,8 @@ from typing import Any
 
 import duckdb
 
-from letterboxd_utility_tools import config
-from letterboxd_utility_tools.core.errors import EmptyDatabaseError, LetterboxdError
+from projectsummer import config
+from projectsummer.core.errors import EmptyDatabaseError, LetterboxdError
 
 #: Bumped whenever schema.sql changes in a way an existing database cannot
 #: simply absorb. The DDL is all CREATE ... IF NOT EXISTS, so an existing

@@ -30,7 +30,7 @@ from types import MappingProxyType
 from typing import Any
 
 #: Package scanned for built-in plugins.
-BUILTIN_PACKAGE = "letterboxd_utility_tools.core.plugins"
+BUILTIN_PACKAGE = "projectsummer.core.plugins"
 
 #: Environment variable listing extra directories to load plugins from.
 PLUGIN_PATH_ENV = "LETTERBOXD_PLUGIN_PATH"

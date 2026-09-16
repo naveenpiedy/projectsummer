@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from letterboxd_utility_tools.core import db, registry
-from letterboxd_utility_tools.core.errors import NoResultError
-from letterboxd_utility_tools.core.ingest import ingest_export
-from letterboxd_utility_tools.core.plugins.explore import overview
-from letterboxd_utility_tools.core.plugins.lists import set_list_ranked, show_lists
+from projectsummer.core import db, registry
+from projectsummer.core.errors import NoResultError
+from projectsummer.core.ingest import ingest_export
+from projectsummer.core.plugins.explore import overview
+from projectsummer.core.plugins.lists import set_list_ranked, show_lists
 
 
 # ---------------------------------------------------------------- overview

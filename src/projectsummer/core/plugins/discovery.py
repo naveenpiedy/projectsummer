@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.errors import NoResultError
-from letterboxd_utility_tools.core.registry import plugin
+from projectsummer.core import db
+from projectsummer.core.errors import NoResultError
+from projectsummer.core.registry import plugin
 
 #: Columns returned for a picked film. Kept in one place so every discovery
 #: plugin describes a film the same way.

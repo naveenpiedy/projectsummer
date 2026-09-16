@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from export_fixture import write_export
-from letterboxd_utility_tools.core import db
+from projectsummer.core import db
 
 # tmdb_id, title, year, runtime, genres, directors, on_watchlist, watched
 SAMPLE_FILMS = [

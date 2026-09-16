@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from letterboxd_utility_tools.cli import _format, build_app, err_console
-from letterboxd_utility_tools.core import registry
+from projectsummer.cli import _format, build_app, err_console
+from projectsummer.core import registry
 
 # Rich wraps help text to the terminal width, which would make assertions
 # depend on the size of whatever terminal the suite happens to run in.
@@ -196,7 +196,7 @@ def test_a_bad_export_path_is_a_message_not_a_traceback(app, empty_conn, tmp_pat
 
 def test_path_arguments_are_converted_from_their_type_hint(app, empty_conn, export):
     """The plugin is annotated `export_dir: Path`; Typer must honour that."""
-    from letterboxd_utility_tools.core import registry
+    from projectsummer.core import registry
 
     parameter = registry.get("ingest").signature.parameters["export_path"]
     assert parameter.annotation is Path
@@ -222,7 +222,7 @@ def test_a_skipped_plugin_is_reported_to_the_user(tmp_path, monkeypatch):
 def test_a_working_plugin_beside_a_broken_one_still_reaches_the_cli(tmp_path, monkeypatch):
     (tmp_path / "broken.py").write_text("not valid python\n", encoding="utf-8")
     (tmp_path / "good.py").write_text(
-        "from letterboxd_utility_tools.core.registry import plugin\n"
+        "from projectsummer.core.registry import plugin\n"
         "\n"
         "@plugin(category='contrib')\n"
         "def greet(name: str = 'world') -> str:\n"
@@ -261,7 +261,7 @@ def test_an_unreadable_schema_is_a_message_not_a_traceback(tmp_path):
     """Raised in the --db callback, which the command wrapper never reaches."""
     import duckdb
 
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     stale = tmp_path / "old.duckdb"
     raw = duckdb.connect(str(stale))
@@ -283,7 +283,7 @@ def test_an_unreadable_schema_is_a_message_not_a_traceback(tmp_path):
 
 def test_a_nonexistent_db_path_is_refused_for_a_read_command(tmp_path):
     """An explicit path that is not there is far likelier a typo than intent."""
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     missing = tmp_path / "typo.duckdb"
     db_module.close_connection()
@@ -299,7 +299,7 @@ def test_a_nonexistent_db_path_is_refused_for_a_read_command(tmp_path):
 
 def test_a_nonexistent_db_path_is_allowed_for_ingest(tmp_path, export):
     """Ingest is what brings a library into existence, so it may create one."""
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     fresh = tmp_path / "new.duckdb"
     db_module.close_connection()
@@ -313,7 +313,7 @@ def test_a_nonexistent_db_path_is_allowed_for_ingest(tmp_path, export):
 
 
 def test_the_refusal_says_how_to_create_one(tmp_path):
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     db_module.close_connection()
     try:
@@ -327,7 +327,7 @@ def test_the_refusal_says_how_to_create_one(tmp_path):
 
 
 def test_an_existing_db_path_is_used_normally(tmp_path, export):
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     existing = tmp_path / "library.duckdb"
     db_module.close_connection()
@@ -360,7 +360,7 @@ def _fake_plugin(*, serves: bool):
 
 def test_a_serving_command_keeps_the_process_alive(monkeypatch, empty_conn):
     """Otherwise the server it started dies the moment the command returns."""
-    from letterboxd_utility_tools import cli
+    from projectsummer import cli
 
     waited: list[bool] = []
     monkeypatch.setattr(cli, "_serve_until_interrupted", lambda: waited.append(True))
@@ -370,7 +370,7 @@ def test_a_serving_command_keeps_the_process_alive(monkeypatch, empty_conn):
 
 
 def test_a_normal_command_does_not_block(monkeypatch, empty_conn):
-    from letterboxd_utility_tools import cli
+    from projectsummer import cli
 
     waited: list[bool] = []
     monkeypatch.setattr(cli, "_serve_until_interrupted", lambda: waited.append(True))
@@ -396,11 +396,11 @@ def test_the_console_script_matches_the_app_name():
     scripts = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["scripts"]
 
     assert list(scripts) == ["summer"]
-    assert scripts["summer"] == "letterboxd_utility_tools.cli:main"
+    assert scripts["summer"] == "projectsummer.cli:main"
 
 
 def test_error_messages_suggest_the_right_command(tmp_path):
-    from letterboxd_utility_tools.core import db as db_module
+    from projectsummer.core import db as db_module
 
     db_module.close_connection()
     try:

@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_NAME = "letterboxd-utility-tools"
+APP_NAME = "projectsummer"
 
 #: Environment variable that overrides the database location.
 DB_PATH_ENV = "LETTERBOXD_DB"

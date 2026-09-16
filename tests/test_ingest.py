@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.ingest import (
+from projectsummer.core import db
+from projectsummer.core.ingest import (
     ExportNotFoundError,
     MalformedExportError,
     ingest_export,

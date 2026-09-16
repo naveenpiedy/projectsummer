@@ -1,4 +1,4 @@
-# Letterboxd Utility Tools
+# Project Summer
 
 Query, analyse and explore your own Letterboxd data — from a CLI, or from an
 LLM agent over MCP. Both paths call the same functions, so neither can drift
@@ -31,7 +31,7 @@ single DuckDB file.
 Every feature is one decorated function:
 
 ```python
-from letterboxd_utility_tools.core.registry import plugin
+from projectsummer.core.registry import plugin
 
 @plugin(category="discovery")
 def random_watchlist_pick(genre: str | None = None) -> dict:
@@ -122,6 +122,15 @@ uv run pytest
 - [ ] RSS polling
 - [ ] MCP server
 - [ ] Remaining plugins: trends, taste, lists, query
+
+## Attribution and affiliation
+
+Project Summer is an independent tool. It is **not affiliated with, endorsed
+by, or connected to Letterboxd Limited**. "Letterboxd" is used here only to
+describe what the tool reads.
+
+Film metadata comes from TMDB. This product uses the TMDB API but is **not
+endorsed or certified by TMDB**.
 
 ## License
 

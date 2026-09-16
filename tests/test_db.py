@@ -5,8 +5,8 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.errors import EmptyDatabaseError
+from projectsummer.core import db
+from projectsummer.core.errors import EmptyDatabaseError
 
 
 def test_schema_is_idempotent(empty_conn):
