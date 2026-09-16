@@ -1003,6 +1003,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "duckdb" },
+    { name = "python-dotenv" },
     { name = "requests" },
     { name = "typer" },
 ]
@@ -1013,7 +1014,6 @@ mcp = [
 ]
 sync = [
     { name = "feedparser" },
-    { name = "python-dotenv" },
     { name = "tqdm" },
 ]
 
@@ -1028,7 +1028,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.1" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.13" },
     { name = "feedparser", marker = "extra == 'sync'", specifier = ">=6.0" },
-    { name = "python-dotenv", marker = "extra == 'sync'", specifier = ">=1.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "tqdm", marker = "extra == 'sync'", specifier = ">=4.66" },
     { name = "typer", specifier = ">=0.27.2" },
