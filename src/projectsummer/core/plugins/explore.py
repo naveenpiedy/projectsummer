@@ -19,8 +19,10 @@ class UnavailableError(LetterboxdError):
 def ui(open_browser: bool = True) -> dict[str, Any]:
     """Open DuckDB's built-in web UI on your library.
 
-    A full SQL notebook and table browser: every table and view, with
-    autocomplete and charting, against the database this command is using. It
+    A SQL notebook and table browser over every table and view, against the
+    database this command is using. Its column explorer shows a histogram and
+    summary statistics for each column of a result; it does not plot one
+    column against another. It
     is part of DuckDB itself, so there is nothing extra to install beyond the
     extension, which is downloaded once on first use.
 

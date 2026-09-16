@@ -96,11 +96,13 @@ likes are not published in any feed, so those still come from a fresh export.
 ```bash
 summer overview   # a summary in the terminal
 summer lists      # your lists, and how big they are
-summer ui         # DuckDB's own web UI: SQL notebook, table browser, charts
+summer ui         # DuckDB's own web UI: SQL notebook, table browser, column profiles
 ```
 
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
-serves until you press Ctrl+C.
+serves until you press Ctrl+C. Its column explorer shows a histogram and
+summary statistics for each column of a result, but it has no chart builder:
+it profiles one column at a time rather than plotting one against another.
 
 ## How it works
 
