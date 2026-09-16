@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "duckdb>=1.1",
+    "requests>=2.34.2",
     "typer>=0.27.2",
 ]
 
@@ -15,9 +17,7 @@ summer = "projectsummer.cli:main"
 
 [project.optional-dependencies]
 mcp = ["fastmcp>=2.13"]
-ingest = [
-    "requests>=2.32",
-    "beautifulsoup4>=4.12",
+sync = [
     "feedparser>=6.0",
     "python-dotenv>=1.0",
     "tqdm>=4.66",

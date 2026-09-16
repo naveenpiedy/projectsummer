@@ -1001,20 +1001,20 @@ name = "projectsummer"
 version = "2.0.0.dev0"
 source = { editable = "." }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "duckdb" },
+    { name = "requests" },
     { name = "typer" },
 ]
 
 [package.optional-dependencies]
-ingest = [
-    { name = "beautifulsoup4" },
-    { name = "feedparser" },
-    { name = "python-dotenv" },
-    { name = "requests" },
-    { name = "tqdm" },
-]
 mcp = [
     { name = "fastmcp" },
+]
+sync = [
+    { name = "feedparser" },
+    { name = "python-dotenv" },
+    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -1024,16 +1024,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "beautifulsoup4", marker = "extra == 'ingest'", specifier = ">=4.12" },
+    { name = "beautifulsoup4", specifier = ">=4.15.0" },
     { name = "duckdb", specifier = ">=1.1" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.13" },
-    { name = "feedparser", marker = "extra == 'ingest'", specifier = ">=6.0" },
-    { name = "python-dotenv", marker = "extra == 'ingest'", specifier = ">=1.0" },
-    { name = "requests", marker = "extra == 'ingest'", specifier = ">=2.32" },
-    { name = "tqdm", marker = "extra == 'ingest'", specifier = ">=4.66" },
+    { name = "feedparser", marker = "extra == 'sync'", specifier = ">=6.0" },
+    { name = "python-dotenv", marker = "extra == 'sync'", specifier = ">=1.0" },
+    { name = "requests", specifier = ">=2.34.2" },
+    { name = "tqdm", marker = "extra == 'sync'", specifier = ">=4.66" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
-provides-extras = ["mcp", "ingest"]
+provides-extras = ["mcp", "sync"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]

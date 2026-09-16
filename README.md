@@ -118,7 +118,8 @@ uv run pytest
 - [x] First plugin: random watchlist picker
 - [x] CLI
 - [x] CSV export ingestion (from the .zip directly)
-- [ ] TMDB enrichment
+- [x] Letterboxd URI -> TMDB id resolution
+- [ ] TMDB metadata enrichment
 - [ ] RSS polling
 - [ ] MCP server
 - [ ] Remaining plugins: trends, taste, lists, query
