@@ -20,7 +20,7 @@ from typing import Any
 
 import requests
 
-from projectsummer.core import db
+from projectsummer.core import db, progress
 from projectsummer.core.errors import LetterboxdError
 
 TMDB_BASE = "https://api.themoviedb.org/3"
@@ -320,7 +320,7 @@ def enrich_all(
     fetched: list[dict[str, Any]] = []
     missing: list[int] = []
 
-    for tmdb_id in pending:
+    for tmdb_id in progress.track(pending, "Fetching metadata from TMDB"):
         row = client.fetch_movie(tmdb_id)
         if row is None:
             missing.append(tmdb_id)
@@ -332,7 +332,9 @@ def enrich_all(
 
     store_films(fetched)
 
+    progress.note("Applying your viewing data")
     watched_or_listed = apply_user_state()
+    progress.note("Rebuilding diary entries")
     diary = rebuild_diary()
 
     return {

@@ -20,9 +20,20 @@ from typing import Annotated, Any
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
-from projectsummer.core import db, registry
+from contextlib import contextmanager
+
+from projectsummer.core import db, progress as progress_api, registry
 from projectsummer.core.errors import LetterboxdError, NoDatabaseError
 from projectsummer.core.registry import Plugin
 
@@ -146,7 +157,10 @@ def _build_command(item: Plugin):
     def command(**kwargs: Any) -> None:
         as_json = kwargs.pop(_JSON_FLAG, False)
         try:
-            result = item.func(**kwargs)
+            # JSON output must stay machine-readable, so nothing is drawn then.
+            reporter = None if as_json else TerminalProgress()
+            with progress_api.reporting_to(reporter):
+                result = item.func(**kwargs)
         except LetterboxdError as exc:
             # Expected outcomes, not crashes: a clear message beats a traceback.
             raise _fail(exc) from None
@@ -179,6 +193,37 @@ def _as_cli_parameter(parameter: inspect.Parameter, help_text: str) -> inspect.P
         kind=inspect.Parameter.KEYWORD_ONLY,
         annotation=Annotated[parameter.annotation, typer.Option(help=help_text)],
     )
+
+
+class TerminalProgress:
+    """Draws a progress bar for work a plugin reports.
+
+    Only installed by this module. A plugin calls `progress.track` and knows
+    nothing about bars, so the same function is silent over MCP or in a test.
+    """
+
+    @contextmanager
+    def task(self, description: str, total: int):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TextColumn("eta"),
+            TimeRemainingColumn(),
+            console=console,
+            # Redirected output should stay clean; a bar redrawing itself into
+            # a pipe or a log file is noise rather than information.
+            disable=not console.is_terminal,
+            transient=True,
+        ) as bar:
+            task_id = bar.add_task(description, total=total)
+            yield lambda: bar.advance(task_id)
+
+    def note(self, message: str) -> None:
+        if console.is_terminal:
+            console.print(f"[dim]{message}...[/dim]")
 
 
 # ------------------------------------------------------------- rendering

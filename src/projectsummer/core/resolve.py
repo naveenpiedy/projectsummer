@@ -29,7 +29,7 @@ from typing import Any
 import requests
 from bs4 import BeautifulSoup
 
-from projectsummer.core import db
+from projectsummer.core import db, progress
 from projectsummer.core.errors import LetterboxdError
 
 #: Sent with every request. An honest identifier is the least a scraper owes
@@ -218,7 +218,8 @@ def resolve_all(
     failures: list[str] = []
 
     try:
-        for index, uri in enumerate(pending):
+        tracked = progress.track(pending, "Looking up films on Letterboxd")
+        for index, uri in enumerate(tracked):
             if index and delay:
                 time.sleep(delay)
 

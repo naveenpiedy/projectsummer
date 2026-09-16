@@ -411,3 +411,61 @@ def test_error_messages_suggest_the_right_command(tmp_path):
         db_module.close_connection()
 
     assert "summer --db" in flat(output_of(result))
+
+
+# ------------------------------------------------------------ progress output
+
+def _render_progress(*, terminal: bool, count: int = 5) -> str:
+    """Drive TerminalProgress against a captured console."""
+    import io
+
+    from rich.console import Console
+
+    from projectsummer import cli
+    from projectsummer.core import progress as progress_api
+
+    buffer = io.StringIO()
+    original = cli.console
+    cli.console = Console(file=buffer, force_terminal=terminal, width=90)
+    try:
+        with progress_api.reporting_to(cli.TerminalProgress()):
+            for _ in progress_api.track(range(count), "Doing the thing"):
+                pass
+            progress_api.note("Nearly there")
+    finally:
+        cli.console = original
+    return buffer.getvalue()
+
+
+def test_progress_is_drawn_on_a_terminal():
+    output = _render_progress(terminal=True)
+    assert "Doing the thing" in output
+    assert "5/5" in output
+    assert "Nearly there" in output
+
+
+def test_progress_is_silent_when_output_is_redirected():
+    """A bar redrawing itself into a pipe or log file is noise."""
+    assert _render_progress(terminal=False).strip() == ""
+
+
+def test_json_output_has_no_progress_mixed_into_it(app, empty_conn, export):
+    """Progress on stdout would make the JSON unparseable."""
+    result = runner.invoke(app, ["ingest", str(export), "--json"])
+    assert result.exit_code == 0
+    json.loads(result.output)  # would raise if anything else were printed
+
+
+def test_a_command_still_works_with_a_reporter_installed(app, conn):
+    """The CLI installs one for every command, including instant ones."""
+    result = runner.invoke(app, ["random-watchlist-pick", "--seed", "3"])
+    assert result.exit_code == 0
+    assert "Title" in result.output
+
+
+def test_the_reporter_is_removed_after_a_command_fails(app, empty_conn):
+    from projectsummer.core import progress as progress_api
+
+    result = runner.invoke(app, ["random-watchlist-pick"])
+    assert result.exit_code == 1
+    assert progress_api.current_reporter() is None
