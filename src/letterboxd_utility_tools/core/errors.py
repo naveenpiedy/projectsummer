@@ -18,3 +18,7 @@ class NoResultError(LetterboxdError):
 
 class EmptyDatabaseError(LetterboxdError):
     """The database has no films yet -- ingestion has not been run."""
+
+
+class NoDatabaseError(LetterboxdError):
+    """An explicitly named database file does not exist."""

@@ -59,6 +59,16 @@ Parameter names become `--options`, type hints become validation, and the
 docstring's `Args:` section becomes each option's help text. Add `--json` to
 any command to get the raw result instead of a table.
 
+## Looking at the data
+
+```bash
+letterboxd overview   # a summary in the terminal
+letterboxd ui         # DuckDB's own web UI: SQL notebook, table browser, charts
+```
+
+`ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
+serves until you press Ctrl+C.
+
 ## Adding your own features
 
 Drop a `.py` file containing decorated functions into a directory, and point
@@ -107,7 +117,7 @@ uv run pytest
 - [x] Plugin registry with auto-discovery
 - [x] First plugin: random watchlist picker
 - [x] CLI
-- [x] CSV export ingestion
+- [x] CSV export ingestion (from the .zip directly)
 - [ ] TMDB enrichment
 - [ ] RSS polling
 - [ ] MCP server

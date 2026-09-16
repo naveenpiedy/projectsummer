@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -22,7 +23,7 @@ from rich.console import Console
 from rich.table import Table
 
 from letterboxd_utility_tools.core import db, registry
-from letterboxd_utility_tools.core.errors import LetterboxdError
+from letterboxd_utility_tools.core.errors import LetterboxdError, NoDatabaseError
 from letterboxd_utility_tools.core.registry import Plugin
 
 #: Parameter name used internally for the --json flag. Underscore-prefixed so
@@ -60,6 +61,7 @@ def build_app() -> typer.Typer:
 
 
 def _root(
+    ctx: typer.Context,
     database: Annotated[
         Path | None,
         typer.Option(
@@ -70,14 +72,43 @@ def _root(
     ] = None,
 ) -> None:
     """Query and explore your Letterboxd library."""
-    if database is not None:
-        try:
-            db.get_connection(database)
-        except LetterboxdError as exc:
-            # Opening the database can fail for expected reasons -- a schema
-            # this version cannot read, for one. The command wrapper below
-            # never sees those, because they happen before it runs.
-            raise _fail(exc) from None
+    if database is None:
+        return
+
+    if not database.exists() and not _may_create(ctx.invoked_subcommand):
+        # A path given explicitly and not found is far more likely to be a
+        # typo than an intention. Creating it silently means the next command
+        # reports an empty library instead of a wrong path.
+        raise _fail(
+            NoDatabaseError(
+                f"No database at {database}. Import an export to create one:"
+                f" letterboxd --db {database} ingest <your-export.zip>"
+            )
+        ) from None
+
+    try:
+        db.get_connection(database)
+    except LetterboxdError as exc:
+        # Opening the database can fail for expected reasons -- a schema
+        # this version cannot read, for one. The command wrapper below
+        # never sees those, because they happen before it runs.
+        raise _fail(exc) from None
+
+
+#: Commands in this category may bring a database into existence. Everything
+#: else expects one to be there already.
+_BOOTSTRAP_CATEGORY = "library"
+
+
+def _may_create(command_name: str | None) -> bool:
+    """Is the command about to run one that legitimately creates a database?"""
+    if command_name is None:
+        return True  # --help, completion, and other non-commands
+    try:
+        item = registry.get(command_name.replace("-", "_"))
+    except KeyError:
+        return True
+    return item.category == _BOOTSTRAP_CATEGORY
 
 
 def _fail(exc: LetterboxdError) -> typer.Exit:
@@ -120,6 +151,10 @@ def _build_command(item: Plugin):
             # Expected outcomes, not crashes: a clear message beats a traceback.
             raise _fail(exc) from None
         _render(result, as_json=as_json)
+
+        if item.serves:
+            # Whatever this started dies with the process, so hold it open.
+            _serve_until_interrupted()
 
     command.__name__ = item.name
     command.__doc__ = item.help_text
@@ -210,6 +245,15 @@ def _format(value: Any) -> str:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)
+
+
+def _serve_until_interrupted() -> None:
+    """Block until Ctrl+C, keeping a server started by a plugin alive."""
+    console.print("[dim]Serving. Press Ctrl+C to stop.[/dim]")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped.[/dim]")
 
 
 def _json_fallback(value: Any) -> str:

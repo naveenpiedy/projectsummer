@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from letterboxd_utility_tools.cli import _format, build_app, err_console
+from letterboxd_utility_tools.core import registry
 
 # Rich wraps help text to the terminal width, which would make assertions
 # depend on the size of whatever terminal the suite happens to run in.
@@ -276,3 +277,103 @@ def test_an_unreadable_schema_is_a_message_not_a_traceback(tmp_path):
     assert result.exit_code == 1
     assert "Traceback" not in output_of(result)
     assert "schema version" in flat(output_of(result))
+
+
+# ------------------------------------------------ an explicit --db must exist
+
+def test_a_nonexistent_db_path_is_refused_for_a_read_command(tmp_path):
+    """An explicit path that is not there is far likelier a typo than intent."""
+    from letterboxd_utility_tools.core import db as db_module
+
+    missing = tmp_path / "typo.duckdb"
+    db_module.close_connection()
+    try:
+        result = runner.invoke(build_app(), ["--db", str(missing), "overview"])
+    finally:
+        db_module.close_connection()
+
+    assert result.exit_code == 1
+    assert "No database at" in flat(output_of(result))
+    assert not missing.exists(), "a typo must not leave a database behind"
+
+
+def test_a_nonexistent_db_path_is_allowed_for_ingest(tmp_path, export):
+    """Ingest is what brings a library into existence, so it may create one."""
+    from letterboxd_utility_tools.core import db as db_module
+
+    fresh = tmp_path / "new.duckdb"
+    db_module.close_connection()
+    try:
+        result = runner.invoke(build_app(), ["--db", str(fresh), "ingest", str(export)])
+    finally:
+        db_module.close_connection()
+
+    assert result.exit_code == 0
+    assert fresh.exists()
+
+
+def test_the_refusal_says_how_to_create_one(tmp_path):
+    from letterboxd_utility_tools.core import db as db_module
+
+    db_module.close_connection()
+    try:
+        result = runner.invoke(
+            build_app(), ["--db", str(tmp_path / "typo.duckdb"), "overview"]
+        )
+    finally:
+        db_module.close_connection()
+
+    assert "ingest" in flat(output_of(result))
+
+
+def test_an_existing_db_path_is_used_normally(tmp_path, export):
+    from letterboxd_utility_tools.core import db as db_module
+
+    existing = tmp_path / "library.duckdb"
+    db_module.close_connection()
+    try:
+        runner.invoke(build_app(), ["--db", str(existing), "ingest", str(export)])
+        db_module.close_connection()
+        result = runner.invoke(build_app(), ["--db", str(existing), "overview"])
+    finally:
+        db_module.close_connection()
+
+    assert result.exit_code == 0
+    assert "films (imported)" in result.output
+
+
+# --------------------------------------------------- serving commands block
+
+def _fake_plugin(*, serves: bool):
+    """A Plugin built by hand, so the branch can be tested without a server."""
+    return registry.Plugin(
+        name="fake",
+        func=lambda: {"url": "http://localhost:4213/"},
+        category="explore",
+        summary="Fake.",
+        description="Fake.",
+        param_help={},
+        help_text="Fake.",
+        serves=serves,
+    )
+
+
+def test_a_serving_command_keeps_the_process_alive(monkeypatch, empty_conn):
+    """Otherwise the server it started dies the moment the command returns."""
+    from letterboxd_utility_tools import cli
+
+    waited: list[bool] = []
+    monkeypatch.setattr(cli, "_serve_until_interrupted", lambda: waited.append(True))
+
+    cli._build_command(_fake_plugin(serves=True))()
+    assert waited == [True]
+
+
+def test_a_normal_command_does_not_block(monkeypatch, empty_conn):
+    from letterboxd_utility_tools import cli
+
+    waited: list[bool] = []
+    monkeypatch.setattr(cli, "_serve_until_interrupted", lambda: waited.append(True))
+
+    cli._build_command(_fake_plugin(serves=False))()
+    assert waited == []

@@ -53,6 +53,10 @@ class Plugin:
     #: Docstring with Args:/Returns:/Raises: stripped, for frontends that
     #: render parameters themselves and would otherwise repeat them.
     help_text: str
+    #: True if this plugin starts something that must outlive the call -- a
+    #: server, say. The CLI has to keep the process alive afterwards or the
+    #: thing it started dies the moment the command returns.
+    serves: bool = False
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -101,12 +105,16 @@ class PluginError(Exception):
 def plugin(
     name: str | None = None,
     category: str = "general",
+    serves: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a function as a plugin.
 
     Args:
         name: Command/tool name. Defaults to the function's own name.
         category: Grouping used for CLI help and tool organisation.
+        serves: Set for a plugin that starts a server or other background
+            work which must outlive the call. The CLI keeps running until
+            interrupted instead of exiting and tearing it down.
 
     Returns:
         A decorator that registers the function and returns it unchanged.
@@ -139,6 +147,7 @@ def plugin(
             description=doc,
             param_help=MappingProxyType(param_help),
             help_text=help_text,
+            serves=serves,
         )
         return func
 

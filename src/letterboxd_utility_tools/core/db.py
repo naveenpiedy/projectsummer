@@ -159,6 +159,12 @@ def close_connection() -> None:
         _connection_path = None
 
 
+def database_path() -> Path | None:
+    """Where the open connection points, or None if nothing is open yet."""
+    with _lock:
+        return _connection_path
+
+
 def library_state() -> str:
     """How far through the pipeline this database has got.
 
