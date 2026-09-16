@@ -5,9 +5,9 @@ LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
 > **Status: early development.** The pipeline works end to end — import,
-> resolve, enrich, query — and is covered by ~200 tests. RSS polling and the
-> MCP server are not built yet, and most of the analysis plugins are still to
-> come. See [Roadmap](#roadmap).
+> resolve, enrich, sync, query — and is covered by ~225 tests. The MCP server
+> is not built yet, and most of the analysis plugins are still to come. See
+> [Roadmap](#roadmap).
 
 ## Install
 
@@ -73,6 +73,23 @@ Genres                 Thriller, Science Fiction, Horror
 Directors              Bryan Forbes
 Candidates considered  15
 ```
+
+## Keeping it current
+
+Re-importing an export is not needed for day-to-day use:
+
+```console
+$ summer sync
+Username         you
+Feed items       50
+New entries      2
+Already known    48
+```
+
+This reads your public RSS feed, which publishes TMDB ids directly — so
+unlike the first import it looks nothing up on Letterboxd's website. It covers
+roughly your last fifty diary entries and reviews. Watchlist additions and
+likes are not published in any feed, so those still come from a fresh export.
 
 ## Looking at the data
 
@@ -173,7 +190,7 @@ interruption mid-run — are exercised deliberately rather than waited for.
 - [x] CSV export ingestion, straight from the `.zip`
 - [x] Letterboxd URI → TMDB id resolution
 - [x] TMDB metadata enrichment
-- [ ] RSS polling to keep the library current
+- [x] RSS polling to keep the library current
 - [ ] MCP server
 - [ ] Plugins: trends, taste, list overlap, ranking, direct SQL
 

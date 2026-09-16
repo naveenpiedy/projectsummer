@@ -8,6 +8,7 @@ from typing import Any
 from projectsummer.core.enrich import enrich_all
 from projectsummer.core.ingest import ingest_export
 from projectsummer.core.resolve import DEFAULT_DELAY, resolve_all
+from projectsummer.core.sync import sync_feed
 from projectsummer.core.registry import plugin
 
 
@@ -86,3 +87,30 @@ def enrich(limit: int | None = None) -> dict[str, Any]:
         MissingTokenError: If no TMDB token is configured.
     """
     return enrich_all(limit=limit)
+
+
+@plugin(name="sync", category="library")
+def sync(username: str | None = None) -> dict[str, Any]:
+    """Catch up with your recent Letterboxd activity.
+
+    Reads your public RSS feed, which carries TMDB ids directly -- so unlike
+    the initial import this needs no lookups against Letterboxd's website. It
+    covers roughly your last fifty diary entries and reviews; watchlist
+    additions and likes are not published in any feed, so those still come
+    from a fresh export.
+
+    Films you have never logged before need their metadata from TMDB, so
+    TMDB_API_KEY is required if the feed contains any.
+
+    Args:
+        username: Whose feed to read. Defaults to LETTERBOXD_USERNAME, or the
+            username recorded when you imported an export.
+
+    Returns:
+        What the feed held and what was new.
+
+    Raises:
+        NoUsernameError: If no username is configured or importable.
+        FeedUnavailableError: If the feed cannot be fetched.
+    """
+    return sync_feed(username=username)
