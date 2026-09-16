@@ -5,7 +5,7 @@ LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
 > **Status: early development.** The pipeline works end to end — import,
-> resolve, enrich, sync, query — and is covered by ~225 tests. The MCP server
+> resolve, enrich, sync, build lists — and is covered by ~270 tests. The MCP server
 > is not built yet, and most of the analysis plugins are still to come. See
 > [Roadmap](#roadmap).
 
@@ -90,6 +90,40 @@ This reads your public RSS feed, which publishes TMDB ids directly — so
 unlike the first import it looks nothing up on Letterboxd's website. It covers
 roughly your last fifty diary entries and reviews. Watchlist additions and
 likes are not published in any feed, so those still come from a fresh export.
+
+## Building lists
+
+Build a list from your library and import it into Letterboxd:
+
+```console
+$ summer list-builder nolan.csv --director "Christopher Nolan" --status watched
+$ summer list-builder aug.csv --watched-from 2026-08-01 --watched-to 2026-08-31 --order-by watched
+$ summer list-builder duo.csv --actor "Kamal Haasan" --actor "Nagesh"
+$ summer list-builder best-90s.csv --year-from 1990 --year-to 1999 --min-rating 4.5 --order-by rating
+```
+
+Filters are director, actor, keyword, genre, watched dates, release years,
+your rating and status. Every filter must hold, including repeats: two
+`--actor` options means films with both. Names match exactly and ignore case;
+a near miss suggests the real name instead of silently returning nothing.
+
+Or write the query yourself. It must be a single `SELECT` returning a
+`tmdb_id` column, and its order becomes the list's order:
+
+```console
+$ summer list-builder overrated-by-me.csv --sql "SELECT tmdb_id FROM films
+    WHERE watched AND tmdb_vote_count > 500 ORDER BY my_rating * 2 - tmdb_rating DESC LIMIT 25"
+```
+
+The query is checked by DuckDB's own parser before it runs, so anything other
+than one `SELECT` — a `DELETE`, a second statement, a `COPY` — is refused.
+
+On Letterboxd, create a new list and choose **Import**. Films are matched
+exactly by TMDB id. The file carries only film identity, never ratings or
+dates, because Letterboxd's list importer is also its diary importer and
+importing a list should not be able to change your diary. Lists larger than
+Letterboxd's 1MB limit are split into numbered files; import them into the
+same list in order.
 
 ## Looking at the data
 
@@ -194,8 +228,9 @@ interruption mid-run — are exercised deliberately rather than waited for.
 - [x] Letterboxd URI → TMDB id resolution
 - [x] TMDB metadata enrichment
 - [x] RSS polling to keep the library current
+- [x] List builder: filters or SQL to a Letterboxd-importable list
 - [ ] MCP server
-- [ ] Plugins: trends, taste, list overlap, ranking, direct SQL
+- [ ] Plugins: trends, taste, list overlap, ranking
 
 ## Attribution and affiliation
 
