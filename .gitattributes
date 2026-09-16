@@ -1,0 +1,3 @@
+# Normalise to LF in the repository so contributors on any OS see the same diff.
+* text=auto eol=lf
+*.duckdb binary

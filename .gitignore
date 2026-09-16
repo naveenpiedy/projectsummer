@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Local data & secrets — never distribute a user's library
+.env
+*.duckdb
+*.duckdb.wal
+*.db
+data/
+exports/
+scrape_cache.json
+*.log

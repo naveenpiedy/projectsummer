@@ -1,0 +1,237 @@
+"""Plugin registry.
+
+Every feature is written exactly once, as a plain function with type hints and
+a docstring, and decorated with :func:`plugin`. The CLI and the MCP server both
+build themselves from this registry -- neither one hand-writes a schema, and
+neither can drift from the other.
+
+    @plugin(category="discovery")
+    def random_watchlist_pick(genre: str | None = None) -> dict:
+        '''Pick a random film from the watchlist.'''
+
+The decorator returns the function untouched, so a plugin stays an ordinary
+function: importable, directly callable, and testable without the registry.
+"""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import inspect
+import os
+import pkgutil
+import sys
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+#: Package scanned for built-in plugins.
+BUILTIN_PACKAGE = "letterboxd_utility_tools.core.plugins"
+
+#: Environment variable listing extra directories to load plugins from.
+PLUGIN_PATH_ENV = "LETTERBOXD_PLUGIN_PATH"
+
+
+@dataclass(frozen=True, slots=True)
+class Plugin:
+    """A registered feature function plus the metadata both frontends need."""
+
+    name: str
+    func: Callable[..., Any]
+    category: str
+    #: First line of the docstring -- a CLI help string / MCP tool summary.
+    summary: str
+    #: Full docstring.
+    description: str
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.func(*args, **kwargs)
+
+    @property
+    def signature(self) -> inspect.Signature:
+        return inspect.signature(self.func)
+
+
+_REGISTRY: dict[str, Plugin] = {}
+
+
+class PluginError(Exception):
+    """Raised when a plugin cannot be registered."""
+
+
+def plugin(
+    name: str | None = None,
+    category: str = "general",
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a function as a plugin.
+
+    Args:
+        name: Command/tool name. Defaults to the function's own name.
+        category: Grouping used for CLI help and tool organisation.
+
+    Returns:
+        A decorator that registers the function and returns it unchanged.
+
+    Raises:
+        PluginError: If the name is already taken, the function has no
+            docstring, or any parameter lacks a type annotation. All three are
+            fatal for the auto-generated frontends, so they fail at import
+            time rather than producing a subtly broken CLI command or tool.
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        plugin_name = name or func.__name__
+        _validate(plugin_name, func)
+
+        existing = _REGISTRY.get(plugin_name)
+        if existing is not None and not _is_same_definition(existing.func, func):
+            raise PluginError(
+                f"Plugin name {plugin_name!r} is already registered by "
+                f"{existing.func.__module__}.{existing.func.__qualname__}."
+            )
+
+        doc = inspect.cleandoc(func.__doc__ or "")
+        _REGISTRY[plugin_name] = Plugin(
+            name=plugin_name,
+            func=func,
+            category=category,
+            summary=doc.split("\n", 1)[0],
+            description=doc,
+        )
+        return func
+
+    return decorator
+
+
+def _is_same_definition(old: Callable[..., Any], new: Callable[..., Any]) -> bool:
+    """Is `new` a reloaded version of `old`, rather than a rival definition?
+
+    Module reload produces a fresh function object for the same source, so
+    identity alone would flag a reload as a name clash.
+    """
+    return old is new or (
+        old.__module__ == new.__module__ and old.__qualname__ == new.__qualname__
+    )
+
+
+def _validate(plugin_name: str, func: Callable[..., Any]) -> None:
+    """Fail loudly on the mistakes that break auto-generated frontends."""
+    if not func.__doc__ or not func.__doc__.strip():
+        raise PluginError(
+            f"Plugin {plugin_name!r} needs a docstring: it becomes the CLI "
+            f"help text and the description an LLM reads to decide when to "
+            f"call the tool."
+        )
+
+    unannotated = [
+        param.name
+        for param in inspect.signature(func).parameters.values()
+        if param.annotation is inspect.Parameter.empty
+        and param.kind not in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+    ]
+    if unannotated:
+        raise PluginError(
+            f"Plugin {plugin_name!r} has unannotated parameter(s): "
+            f"{', '.join(unannotated)}. Type hints are the schema."
+        )
+
+
+def all_plugins() -> Mapping[str, Plugin]:
+    """Return every registered plugin, keyed by name (read-only)."""
+    return MappingProxyType(_REGISTRY)
+
+
+def get(name: str) -> Plugin:
+    """Look up a single plugin by name.
+
+    Raises:
+        KeyError: If no plugin is registered under that name.
+    """
+    try:
+        return _REGISTRY[name]
+    except KeyError:
+        known = ", ".join(sorted(_REGISTRY)) or "none"
+        raise KeyError(f"No plugin named {name!r}. Registered: {known}") from None
+
+
+def by_category() -> dict[str, list[Plugin]]:
+    """Group plugins by category, for CLI help and tool listings."""
+    grouped: dict[str, list[Plugin]] = {}
+    for item in _REGISTRY.values():
+        grouped.setdefault(item.category, []).append(item)
+    for items in grouped.values():
+        items.sort(key=lambda p: p.name)
+    return dict(sorted(grouped.items()))
+
+
+def clear() -> None:
+    """Empty the registry. Intended for tests."""
+    _REGISTRY.clear()
+
+
+def discover(extra_dirs: list[str | Path] | None = None) -> Mapping[str, Plugin]:
+    """Import every plugin module so its decorators run.
+
+    Scans the built-in plugin package, then any directories given in
+    `extra_dirs` or in the ``LETTERBOXD_PLUGIN_PATH`` environment variable.
+    That second path is how a user adds a feature without touching `core/`.
+
+    Returns:
+        The registry, after all imports have completed.
+    """
+    package = importlib.import_module(BUILTIN_PACKAGE)
+    for module in pkgutil.iter_modules(package.__path__):
+        if not module.name.startswith("_"):
+            _import_registering(f"{BUILTIN_PACKAGE}.{module.name}")
+
+    for directory in _external_dirs(extra_dirs):
+        _load_directory(directory)
+
+    return all_plugins()
+
+
+def _import_registering(module_name: str) -> None:
+    """Import `module_name`, ensuring its decorators have actually run.
+
+    A plain ``import_module`` is a no-op once a module is in ``sys.modules``,
+    so after :func:`clear` the plugins would never come back. Reload in that
+    case, so `discover()` always means what its name says.
+    """
+    module = sys.modules.get(module_name)
+    if module is None:
+        importlib.import_module(module_name)
+        return
+
+    already_registered = any(
+        item.func.__module__ == module_name for item in _REGISTRY.values()
+    )
+    if not already_registered:
+        importlib.reload(module)
+
+
+def _external_dirs(extra_dirs: list[str | Path] | None) -> Iterator[Path]:
+    for entry in extra_dirs or []:
+        yield Path(entry).expanduser()
+
+    raw = os.environ.get(PLUGIN_PATH_ENV, "")
+    for entry in raw.split(os.pathsep):
+        if entry.strip():
+            yield Path(entry.strip()).expanduser()
+
+
+def _load_directory(directory: Path) -> None:
+    """Import every top-level ``*.py`` file in `directory` as a plugin module."""
+    if not directory.is_dir():
+        return
+
+    for path in sorted(directory.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        module_name = f"lbxd_contrib_{path.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
