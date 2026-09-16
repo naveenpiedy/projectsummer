@@ -10,23 +10,24 @@ from letterboxd_utility_tools.core.registry import plugin
 
 
 @plugin(name="ingest", category="library")
-def ingest(export_dir: Path) -> dict[str, Any]:
+def ingest(export_path: Path) -> dict[str, Any]:
     """Import a Letterboxd CSV export.
 
     Download your export from Letterboxd (Settings -> Data -> Export Your
-    Data), unzip it, and point this at the resulting directory.
+    Data) and point this straight at the .zip -- there is no need to unzip it
+    first. An already-unzipped directory works too.
 
     This loads the raw data only. Films are identified by Letterboxd URIs at
     this stage; run enrichment afterwards to resolve them to TMDB metadata.
 
     Args:
-        export_dir: The unzipped export directory, the one containing
+        export_path: Your export .zip, or an unzipped directory containing
             diary.csv and watchlist.csv.
 
     Returns:
         Counts of what was loaded, plus any files that were skipped.
 
     Raises:
-        ExportNotFoundError: If the directory holds no Letterboxd CSVs.
+        ExportNotFoundError: If the path holds no Letterboxd CSVs.
     """
-    return ingest_export(export_dir).as_dict()
+    return ingest_export(export_path).as_dict()

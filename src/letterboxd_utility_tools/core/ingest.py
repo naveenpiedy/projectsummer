@@ -14,11 +14,17 @@ Two things about the export shape drive the design:
 
 Lists need a hand-written parser: their CSVs hold two tables in one file and
 DuckDB's sniffer rejects them outright.
+
+Input may be the `.zip` Letterboxd hands you or an already-unzipped
+directory. A zip is expanded into a temporary directory that is removed when
+the import finishes, successfully or not.
 """
 
 from __future__ import annotations
 
 import csv
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +54,15 @@ _TAG_SPLIT = ","
 #: everything as VARCHAR makes the types independent of the data, and
 #: `try_cast` turns anything unparseable into NULL instead of an error.
 _READ_CSV = "read_csv(?, all_varchar = true, header = true)"
+
+#: Files whose presence identifies a directory as a Letterboxd export.
+_EXPECTED_FILES: tuple[str, ...] = (
+    "watched.csv",
+    "watchlist.csv",
+    "likes/films.csv",
+    "ratings.csv",
+    "diary.csv",
+)
 
 #: Columns the film-scoped exports must provide.
 _FILM_FILE_COLUMNS = frozenset({"Date", "Name", "Year", "Letterboxd URI"})
@@ -111,8 +126,13 @@ class IngestReport:
 
 # ------------------------------------------------------------------- public
 
-def ingest_export(export_dir: str | Path) -> IngestReport:
+def ingest_export(export_path: str | Path) -> IngestReport:
     """Load every CSV in a Letterboxd export into the database.
+
+    Accepts either the `.zip` Letterboxd hands you or an already-unzipped
+    directory. A zip is expanded into a temporary directory that is deleted
+    afterwards, so nothing is left lying around next to the archive and a
+    failed run cleans up after itself.
 
     Staging tables and Letterboxd-sourced lists are replaced wholesale, so
     re-running against a newer export drops entries you have since removed
@@ -120,17 +140,43 @@ def ingest_export(export_dir: str | Path) -> IngestReport:
     100, a friend's ranked list) are left alone.
 
     Args:
-        export_dir: The unzipped export directory, the one containing
+        export_path: The export `.zip`, or an unzipped directory containing
             `diary.csv` and `watchlist.csv`.
 
     Returns:
         An :class:`IngestReport` counting what was loaded.
 
     Raises:
-        ExportNotFoundError: If the directory is missing or holds no
-            recognisable Letterboxd CSVs.
+        ExportNotFoundError: If the path is missing or holds no recognisable
+            Letterboxd CSVs.
+        MalformedExportError: If a zip member would escape the extraction
+            directory, or a CSV is missing columns this code reads.
     """
-    directory = Path(export_dir).expanduser()
+    source = Path(export_path).expanduser()
+
+    if source.is_file() and zipfile.is_zipfile(source):
+        # ignore_cleanup_errors because Windows can briefly hold a handle on a
+        # file that was just read; a stale temp directory must not turn a
+        # successful import into a failure.
+        with tempfile.TemporaryDirectory(
+            prefix="letterboxd-export-", ignore_cleanup_errors=True
+        ) as workspace:
+            unpacked = _extract_export(source, Path(workspace))
+            return _ingest_directory(unpacked, reported_as=source)
+
+    return _ingest_directory(source, reported_as=source)
+
+
+def _ingest_directory(directory: Path, *, reported_as: Path) -> IngestReport:
+    """Ingest an unzipped export directory.
+
+    Args:
+        directory: Where the CSVs actually are, which for a zip is a
+            temporary location.
+        reported_as: What the user asked for, so the report names the archive
+            they passed rather than a temporary directory that no longer
+            exists by the time they read it.
+    """
     _check_export(directory)
 
     conn = db.get_connection()
@@ -156,7 +202,7 @@ def ingest_export(export_dir: str | Path) -> IngestReport:
         raise
 
     return IngestReport(
-        export_dir=str(directory),
+        export_dir=str(reported_as),
         films=films,
         diary_entries=diary,
         lists=list_count,
@@ -166,16 +212,57 @@ def ingest_export(export_dir: str | Path) -> IngestReport:
     )
 
 
+def _extract_export(archive: Path, destination: Path) -> Path:
+    """Unpack an export zip into `destination` and return the export root.
+
+    Raises:
+        MalformedExportError: If any member would be written outside
+            `destination`. A crafted archive can otherwise use `..` segments
+            or an absolute path to overwrite files elsewhere on disk, and
+            this tool extracts whatever it is pointed at.
+    """
+    root = destination.resolve()
+
+    with zipfile.ZipFile(archive) as bundle:
+        for member in bundle.infolist():
+            target = (destination / member.filename).resolve()
+            if target != root and not target.is_relative_to(root):
+                raise MalformedExportError(
+                    f"{archive.name} contains an entry that would be written "
+                    f"outside the extraction directory: {member.filename!r}. "
+                    f"Refusing to unpack it."
+                )
+        bundle.extractall(destination)
+
+    return _find_export_root(destination)
+
+
+def _find_export_root(directory: Path) -> Path:
+    """Locate the CSVs, whether or not the zip wrapped them in a folder.
+
+    Letterboxd has shipped both layouts: files at the archive root, and files
+    inside a single `letterboxd-<user>-<date>` folder.
+    """
+    if any((directory / name).exists() for name in _EXPECTED_FILES):
+        return directory
+
+    subdirectories = [path for path in directory.iterdir() if path.is_dir()]
+    if len(subdirectories) == 1:
+        return subdirectories[0]
+
+    # Nothing recognisable; let _check_export produce the useful message.
+    return directory
+
+
 def _check_export(directory: Path) -> None:
     if not directory.is_dir():
         raise ExportNotFoundError(f"{directory} is not a directory.")
 
-    expected = [name for _, name, _ in _FILM_SOURCES] + ["diary.csv"]
-    if not any((directory / name).exists() for name in expected):
+    if not any((directory / name).exists() for name in _EXPECTED_FILES):
         raise ExportNotFoundError(
             f"{directory} contains no Letterboxd CSVs. Expected to find at "
-            f"least one of: {', '.join(expected)}. Point this at the unzipped "
-            f"export directory, the one holding diary.csv."
+            f"least one of: {', '.join(_EXPECTED_FILES)}. Point this at your "
+            f"export .zip, or at the directory holding diary.csv."
         )
 
 

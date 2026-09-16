@@ -8,6 +8,8 @@ like the one library this was developed against.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from letterboxd_utility_tools.core import db
@@ -20,6 +22,7 @@ from letterboxd_utility_tools.core.ingest import (
 
 from export_fixture import (
     ALIEN,
+    DIARY_HEADER,
     ENTRY_1,
     ENTRY_2,
     SHINING,
@@ -337,3 +340,130 @@ def test_stale_staging_rows_are_cleared_when_film_sources_vanish(empty_conn, exp
     report = ingest_export(export)
     assert report.films == 0
     assert db.query("SELECT count(*) AS n FROM staging_films")[0]["n"] == 0
+
+
+# ------------------------------------------------------------ zipped exports
+#
+# Letterboxd hands you a .zip, so making people unzip it first is a step that
+# buys nothing. A zip is expanded into a temporary directory that must be
+# gone afterwards, whether the import succeeded or failed.
+
+def _zip_up(export_dir, archive, prefix=""):
+    """Zip a built export, optionally nested inside a wrapper folder."""
+    import zipfile
+
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in sorted(export_dir.rglob("*")):
+            if path.is_file():
+                arcname = path.relative_to(export_dir)
+                bundle.write(path, f"{prefix}{arcname.as_posix()}")
+    return archive
+
+
+def test_a_zip_ingests_exactly_like_a_directory(empty_conn, export, tmp_path):
+    from_directory = ingest_export(export)
+
+    archive = _zip_up(export, tmp_path / "export.zip")
+    from_zip = ingest_export(archive)
+
+    assert from_zip.films == from_directory.films
+    assert from_zip.diary_entries == from_directory.diary_entries
+    assert from_zip.lists == from_directory.lists
+    assert from_zip.list_entries == from_directory.list_entries
+    assert from_zip.profile == from_directory.profile
+
+
+def test_a_zip_wrapping_its_files_in_a_folder_also_works(empty_conn, export, tmp_path):
+    """Letterboxd has shipped both layouts."""
+    archive = _zip_up(export, tmp_path / "nested.zip", prefix="letterboxd-someone-2026/")
+    report = ingest_export(archive)
+    assert report.films == 4
+    assert report.diary_entries == 3
+
+
+def test_the_report_names_the_zip_not_the_temporary_directory(empty_conn, export, tmp_path):
+    archive = _zip_up(export, tmp_path / "export.zip")
+    report = ingest_export(archive)
+    # The temporary directory is gone by the time anyone reads the report, so
+    # naming it would be useless; the archive the user passed is the answer.
+    assert report.export_dir == str(archive)
+    assert report.export_dir.endswith(".zip")
+
+
+def test_the_zip_is_not_unpacked_next_to_itself(empty_conn, export, tmp_path):
+    archive = _zip_up(export, tmp_path / "solo" / "export.zip")
+    before = set(archive.parent.iterdir())
+
+    ingest_export(archive)
+
+    assert set(archive.parent.iterdir()) == before
+
+
+def test_the_temporary_directory_is_removed_afterwards(empty_conn, export, tmp_path, monkeypatch):
+    import tempfile as tempfile_module
+
+    created: list[str] = []
+    real = tempfile_module.TemporaryDirectory
+
+    class Recording(real):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created.append(self.name)
+
+    monkeypatch.setattr(tempfile_module, "TemporaryDirectory", Recording)
+
+    archive = _zip_up(export, tmp_path / "export.zip")
+    ingest_export(archive)
+
+    assert created, "a zip should have been expanded into a temporary directory"
+    assert not any(Path(name).exists() for name in created)
+
+
+def test_a_failed_zip_import_still_cleans_up(empty_conn, export, tmp_path, monkeypatch):
+    import tempfile as tempfile_module
+
+    created: list[str] = []
+    real = tempfile_module.TemporaryDirectory
+
+    class Recording(real):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created.append(self.name)
+
+    monkeypatch.setattr(tempfile_module, "TemporaryDirectory", Recording)
+
+    write_csv(export / "diary.csv", "Date,Name,Letterboxd URI\n2024-01-01,X,u\n")
+    archive = _zip_up(export, tmp_path / "broken.zip")
+
+    with pytest.raises(MalformedExportError):
+        ingest_export(archive)
+
+    assert created
+    assert not any(Path(name).exists() for name in created)
+
+
+def test_a_zip_that_would_escape_its_directory_is_refused(empty_conn, tmp_path):
+    """Zip-slip: a crafted archive must not write outside the temp directory."""
+    import zipfile
+
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("diary.csv", DIARY_HEADER)
+        bundle.writestr("../escaped.txt", "pwned")
+
+    with pytest.raises(MalformedExportError, match="outside the extraction directory"):
+        ingest_export(archive)
+
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_a_zip_that_is_not_an_export_is_rejected(empty_conn, tmp_path):
+    import zipfile
+
+    archive = tmp_path / "holiday-photos.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("beach.jpg", "not a csv")
+
+    with pytest.raises(ExportNotFoundError, match="no Letterboxd CSVs"):
+        ingest_export(archive)

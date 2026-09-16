@@ -13,7 +13,19 @@ from the other.
 
 Letterboxd's API is closed to personal projects, so data comes from the export
 you can download from your account settings, topped up over time by polling
-your public RSS feeds. Films are enriched with TMDB metadata and stored in a
+your public RSS feeds. Point the importer straight at the `.zip` -- it is
+unpacked into a temporary directory and cleaned up afterwards:
+
+```console
+$ letterboxd ingest letterboxd-you-2026-09-16.zip
+Export dir     letterboxd-you-2026-09-16.zip
+Films          1392
+Diary entries  1114
+Lists          22
+List entries   461
+Profile        you
+```
+ Films are enriched with TMDB metadata and stored in a
 single DuckDB file.
 
 Every feature is one decorated function:

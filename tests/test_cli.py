@@ -141,14 +141,14 @@ def test_a_required_parameter_becomes_a_positional_argument(app):
     result = runner.invoke(app, ["ingest", "--help"])
     assert result.exit_code == 0
     assert "Arguments" in result.output
-    assert "export_dir" in result.output
+    assert "export_path" in result.output
     assert "required" in result.output
-    assert "--export-dir" not in result.output  # required means positional
+    assert "--export-path" not in result.output  # required means positional
 
 
 def test_a_required_argument_takes_its_help_from_the_docstring(app):
     result = runner.invoke(app, ["ingest", "--help"])
-    assert "The unzipped export directory" in flat(result.output)
+    assert "Your export .zip" in flat(result.output)
 
 
 def test_a_path_annotation_reaches_the_help_as_a_path_type(app):
@@ -159,7 +159,7 @@ def test_a_path_annotation_reaches_the_help_as_a_path_type(app):
 def test_a_missing_required_argument_is_an_error(app, empty_conn):
     result = runner.invoke(app, ["ingest"])
     assert result.exit_code == 2
-    assert "export_dir" in output_of(result)
+    assert "export_path" in output_of(result)
 
 
 def test_ingest_appears_under_its_own_category(app):
@@ -197,7 +197,7 @@ def test_path_arguments_are_converted_from_their_type_hint(app, empty_conn, expo
     """The plugin is annotated `export_dir: Path`; Typer must honour that."""
     from letterboxd_utility_tools.core import registry
 
-    parameter = registry.get("ingest").signature.parameters["export_dir"]
+    parameter = registry.get("ingest").signature.parameters["export_path"]
     assert parameter.annotation is Path
     assert runner.invoke(app, ["ingest", str(export)]).exit_code == 0
 
