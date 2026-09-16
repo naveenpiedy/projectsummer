@@ -39,7 +39,7 @@ err_console = Console(stderr=True)
 def build_app() -> typer.Typer:
     """Construct the Typer app, one command per registered plugin."""
     app = typer.Typer(
-        name="letterboxd",
+        name="summer",
         help="Query and explore your Letterboxd library.",
         no_args_is_help=True,
     )
@@ -82,7 +82,7 @@ def _root(
         raise _fail(
             NoDatabaseError(
                 f"No database at {database}. Import an export to create one:"
-                f" letterboxd --db {database} ingest <your-export.zip>"
+                f" summer --db {database} ingest <your-export.zip>"
             )
         ) from None
 

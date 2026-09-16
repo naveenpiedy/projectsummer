@@ -377,3 +377,37 @@ def test_a_normal_command_does_not_block(monkeypatch, empty_conn):
 
     cli._build_command(_fake_plugin(serves=False))()
     assert waited == []
+
+
+# ----------------------------------------------------------- the command name
+
+def test_the_command_is_called_summer(app):
+    """Typer prints this in every usage line and error, so it must not drift."""
+    result = runner.invoke(app, ["--help"])
+    assert "Usage: summer" in result.output
+
+
+def test_the_console_script_matches_the_app_name():
+    """pyproject defines the installed command; the app names itself. One name."""
+    import tomllib
+    from pathlib import Path as _Path
+
+    pyproject = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+    scripts = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["scripts"]
+
+    assert list(scripts) == ["summer"]
+    assert scripts["summer"] == "letterboxd_utility_tools.cli:main"
+
+
+def test_error_messages_suggest_the_right_command(tmp_path):
+    from letterboxd_utility_tools.core import db as db_module
+
+    db_module.close_connection()
+    try:
+        result = runner.invoke(
+            build_app(), ["--db", str(tmp_path / "typo.duckdb"), "overview"]
+        )
+    finally:
+        db_module.close_connection()
+
+    assert "summer --db" in flat(output_of(result))

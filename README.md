@@ -17,7 +17,7 @@ your public RSS feeds. Point the importer straight at the `.zip` -- it is
 unpacked into a temporary directory and cleaned up afterwards:
 
 ```console
-$ letterboxd ingest letterboxd-you-2026-09-16.zip
+$ summer ingest letterboxd-you-2026-09-16.zip
 Export dir     letterboxd-you-2026-09-16.zip
 Films          1392
 Diary entries  1114
@@ -46,7 +46,7 @@ hand-written twice.
 That function becomes this, with no CLI code written for it:
 
 ```console
-$ letterboxd random-watchlist-pick --genre horror
+$ summer random-watchlist-pick --genre horror
 Title                  The Others
 Year                   2001
 Runtime                101
@@ -62,8 +62,8 @@ any command to get the raw result instead of a table.
 ## Looking at the data
 
 ```bash
-letterboxd overview   # a summary in the terminal
-letterboxd ui         # DuckDB's own web UI: SQL notebook, table browser, charts
+summer overview   # a summary in the terminal
+summer ui         # DuckDB's own web UI: SQL notebook, table browser, charts
 ```
 
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
