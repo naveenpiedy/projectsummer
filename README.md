@@ -4,17 +4,28 @@ Query, analyse and explore your own Letterboxd data — from a CLI, or from an
 LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
-> **Status: early development.** The plugin system, database layer and CLI
-> work and are tested, and a CSV export can be ingested. TMDB enrichment is
-> not built yet, so films are not yet resolved to metadata. See
-> [Roadmap](#roadmap).
+> **Status: early development.** The pipeline works end to end — import,
+> resolve, enrich, query — and is covered by ~200 tests. RSS polling and the
+> MCP server are not built yet, and most of the analysis plugins are still to
+> come. See [Roadmap](#roadmap).
 
-## How it works
+## Install
 
-Letterboxd's API is closed to personal projects, so data comes from the export
-you can download from your account settings, topped up over time by polling
-your public RSS feeds. Point the importer straight at the `.zip` -- it is
-unpacked into a temporary directory and cleaned up afterwards:
+Needs Python 3.11+.
+
+```bash
+git clone https://github.com/naveenpiedy/projectsummer
+cd projectsummer
+uv sync
+```
+
+That installs a `summer` command. Without [uv](https://docs.astral.sh/uv/),
+`pip install -e .` does the same.
+
+## Getting started
+
+Download your data from Letterboxd (Settings → Data → Export Your Data). Point
+Project Summer at the `.zip` — there is no need to unzip it.
 
 ```console
 $ summer ingest letterboxd-you-2026-09-16.zip
@@ -25,8 +36,56 @@ Lists          22
 List entries   461
 Profile        you
 ```
- Films are enriched with TMDB metadata and stored in a
-single DuckDB file.
+
+The export identifies films only by `boxd.it` links — it contains no TMDB or
+IMDb ids anywhere — so the next step looks each one up:
+
+```console
+$ summer resolve
+```
+
+This is **the only part of the tool that reads Letterboxd's website**, and it
+is built to do so once per film, ever. Results are cached, so a re-import or a
+later export resolves only genuinely new films. Requests are spaced half a
+second apart and carry a User-Agent naming the tool. Expect roughly one film
+per second, so about 20 minutes for a thousand-film library, once. It is safe
+to interrupt — every result is written as it arrives, and re-running resumes.
+
+Then fetch the metadata, which comes from [TMDB](https://www.themoviedb.org/)
+and needs a free API token (see [Configuration](#configuration)):
+
+```console
+$ summer enrich
+Attempted       1390
+Enriched        1390
+Diary entries   1114
+Unmatched          0
+```
+
+That is the setup done. Now you can ask it things:
+
+```console
+$ summer random-watchlist-pick --genre horror
+Title                  The Stepford Wives
+Year                   1975
+Runtime                117
+Genres                 Thriller, Science Fiction, Horror
+Directors              Bryan Forbes
+Candidates considered  15
+```
+
+## Looking at the data
+
+```bash
+summer overview   # a summary in the terminal
+summer lists      # your lists, and how big they are
+summer ui         # DuckDB's own web UI: SQL notebook, table browser, charts
+```
+
+`ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
+serves until you press Ctrl+C.
+
+## How it works
 
 Every feature is one decorated function:
 
@@ -35,94 +94,88 @@ from projectsummer.core.registry import plugin
 
 @plugin(category="discovery")
 def random_watchlist_pick(genre: str | None = None) -> dict:
-    """Pick a random film from your watchlist."""
-    ...
+    """Pick a random film from your watchlist.
+
+    Args:
+        genre: Only consider films in this genre. Case-insensitive.
+    """
 ```
 
 The type hints *are* the schema. The CLI reads the signature to build a
-command; the MCP server reads the same signature to build a tool. Nothing is
-hand-written twice.
-
-That function becomes this, with no CLI code written for it:
-
-```console
-$ summer random-watchlist-pick --genre horror
-Title                  The Others
-Year                   2001
-Runtime                101
-Genres                 Horror, Mystery
-Directors              Alejandro Amenabar
-Candidates considered  3
-```
+command; the MCP server will read the same signature to build a tool. Nothing
+is hand-written twice.
 
 Parameter names become `--options`, type hints become validation, and the
 docstring's `Args:` section becomes each option's help text. Add `--json` to
-any command to get the raw result instead of a table.
+any command for the raw result instead of a table.
 
-## Looking at the data
+### Adding your own features
 
-```bash
-summer overview   # a summary in the terminal
-summer ui         # DuckDB's own web UI: SQL notebook, table browser, charts
+Drop a `.py` file containing decorated functions into a directory and point
+`LETTERBOXD_PLUGIN_PATH` at it. They appear in the CLI alongside the built-ins
+with no need to touch `core/`. A file that fails to import is reported and
+skipped rather than taking the tool down with it.
+
+## Data model
+
+One wide `films` table. DuckDB `LIST` columns mean `list_contains(genres,
+'Horror')` and `UNNEST(genres)` work directly, with no string splitting:
+
+```sql
+SELECT genre, count(*) FROM (SELECT unnest(genres) AS genre FROM films WHERE watched)
+GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-`ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
-serves until you press Ctrl+C.
+Watch history lives in a separate `diary_entries` table, one row per viewing,
+because a film can be watched more than once and each viewing carries its own
+date, rating and tags. That is what makes viewing streaks, rating drift and
+year-in-review answerable at all. Rolled-up counts come from the
+`film_watch_stats` view, so they can never disagree with the rows beneath them.
 
-## Adding your own features
+Also stored: `lists` and `list_entries` (with positions, so ranked lists
+survive a round trip), a one-row `profile`, and `film_identity` — the resolution
+cache that keeps Letterboxd lookups down to one per film.
 
-Drop a `.py` file containing decorated functions into a directory, and point
-`LETTERBOXD_PLUGIN_PATH` at it. They show up in the CLI and over MCP alongside
-the built-ins — no need to touch `core/`.
+Your email address, which appears in Letterboxd's `profile.csv`, is
+deliberately not stored. One user per database file.
 
 ## Configuration
 
-All optional; none are needed to query a database that already exists.
+Only `TMDB_API_KEY` is required, and only for enrichment.
 
 | Variable | Purpose |
 |---|---|
-| `TMDB_API_KEY` | TMDB API read-access token, for metadata enrichment. |
+| `TMDB_API_KEY` | TMDB **API Read Access Token**, for metadata enrichment. |
 | `LETTERBOXD_USERNAME` | Username for RSS polling. Defaults to your imported profile. |
 | `LETTERBOXD_DB` | Database location. Defaults to a per-user data directory. |
 | `LETTERBOXD_PLUGIN_PATH` | Extra directories to load plugins from. |
 
-Copy `.env.example` to `.env` to set them.
-
-## Data model
-
-One wide `films` table — DuckDB `LIST` columns mean `list_contains(genres,
-'Horror')` and `UNNEST(genres)` work directly, with no string splitting.
-
-Watch history lives in a separate `diary_entries` table, one row per viewing,
-because a film can be watched more than once and each viewing carries its own
-date, rating and tags. Rolled-up counts come from the `film_watch_stats` view,
-so they can never disagree with the entries underneath them.
-
-Also stored: `lists` and `list_entries` (with positions, so ranked lists
-survive), and a one-row `profile`. Your email address, which appears in
-Letterboxd's `profile.csv`, is deliberately not stored.
-
-One user per database file.
+Copy `.env.example` to `.env` and fill it in. A free TMDB account provides a
+token at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
+— take the long **Read Access Token**, not the short v3 key.
 
 ## Development
 
-```
+```bash
 uv sync
 uv run pytest
 ```
+
+Tests never touch the network: HTTP is faked at the session boundary, so the
+awkward cases — a redirect to a diary entry, a page with no ids, a timeout, an
+interruption mid-run — are exercised deliberately rather than waited for.
 
 ## Roadmap
 
 - [x] DuckDB schema and connection layer
 - [x] Plugin registry with auto-discovery
-- [x] First plugin: random watchlist picker
-- [x] CLI
-- [x] CSV export ingestion (from the .zip directly)
-- [x] Letterboxd URI -> TMDB id resolution
+- [x] CLI generated from the registry
+- [x] CSV export ingestion, straight from the `.zip`
+- [x] Letterboxd URI → TMDB id resolution
 - [x] TMDB metadata enrichment
-- [ ] RSS polling
+- [ ] RSS polling to keep the library current
 - [ ] MCP server
-- [ ] Remaining plugins: trends, taste, lists, query
+- [ ] Plugins: trends, taste, list overlap, ranking, direct SQL
 
 ## Attribution and affiliation
 
@@ -130,9 +183,8 @@ Project Summer is an independent tool. It is **not affiliated with, endorsed
 by, or connected to Letterboxd Limited**. "Letterboxd" is used here only to
 describe what the tool reads.
 
-Film metadata comes from TMDB. This product uses the TMDB API but is **not
-endorsed or certified by TMDB**.
+This product uses the TMDB API but is **not endorsed or certified by TMDB**.
 
 ## License
 
-MIT
+[MIT](LICENSE)
