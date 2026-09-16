@@ -158,11 +158,12 @@ deliberately not stored. One user per database file.
 
 ## Configuration
 
-Only `TMDB_API_KEY` is required, and only for enrichment.
+Only `TMDB_API_KEY` is required — by `enrich`, and by `sync` when your feed
+contains a film you have never logged before.
 
 | Variable | Purpose |
 |---|---|
-| `TMDB_API_KEY` | TMDB **API Read Access Token**, for metadata enrichment. |
+| `TMDB_API_KEY` | TMDB **API Read Access Token**, for film metadata. |
 | `LETTERBOXD_USERNAME` | Username for RSS polling. Defaults to your imported profile. |
 | `LETTERBOXD_DB` | Database location. Defaults to a per-user data directory. |
 | `LETTERBOXD_PLUGIN_PATH` | Extra directories to load plugins from. |
