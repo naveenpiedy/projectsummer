@@ -15,6 +15,7 @@ function: importable, directly callable, and testable without the registry.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import inspect
@@ -72,7 +73,25 @@ class Plugin:
             return inspect.signature(self.func)
 
 
+@dataclass(frozen=True, slots=True)
+class LoadFailure:
+    """A plugin file that could not be imported.
+
+    Recorded rather than raised, so that one bad third-party file cannot take
+    down the whole tool. Frontends read :func:`load_failures` and decide how to
+    surface these; the registry itself stays quiet, as a library should.
+    """
+
+    #: Path or module name that failed.
+    source: str
+    error: Exception
+
+    def __str__(self) -> str:
+        return f"{self.source}: {type(self.error).__name__}: {self.error}"
+
+
 _REGISTRY: dict[str, Plugin] = {}
+_LOAD_FAILURES: list[LoadFailure] = []
 
 
 class PluginError(Exception):
@@ -264,9 +283,16 @@ def discover(extra_dirs: list[str | Path] | None = None) -> Mapping[str, Plugin]
     `extra_dirs` or in the ``LETTERBOXD_PLUGIN_PATH`` environment variable.
     That second path is how a user adds a feature without touching `core/`.
 
+    A third-party file that fails to import is recorded in
+    :func:`load_failures` and skipped, so one broken or half-installed plugin
+    cannot stop the tool from starting. Built-in plugins are not forgiven that
+    way: they ship with the package, so a failure there is our bug and raises.
+
     Returns:
         The registry, after all imports have completed.
     """
+    _LOAD_FAILURES.clear()
+
     package = importlib.import_module(BUILTIN_PACKAGE)
     for module in pkgutil.iter_modules(package.__path__):
         if not module.name.startswith("_"):
@@ -276,6 +302,11 @@ def discover(extra_dirs: list[str | Path] | None = None) -> Mapping[str, Plugin]
         _load_directory(directory)
 
     return all_plugins()
+
+
+def load_failures() -> tuple[LoadFailure, ...]:
+    """Plugin files skipped during the last :func:`discover` call."""
+    return tuple(_LOAD_FAILURES)
 
 
 def _import_registering(module_name: str) -> None:
@@ -315,9 +346,39 @@ def _load_directory(directory: Path) -> None:
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        module_name = f"lbxd_contrib_{path.stem}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
+        try:
+            _load_file(path)
+        except Exception as error:  # noqa: BLE001 -- third-party code
+            _LOAD_FAILURES.append(LoadFailure(source=str(path), error=error))
+
+
+def _load_file(path: Path) -> None:
+    """Import a single plugin file, registering it in ``sys.modules``."""
+    module_name = _contrib_module_name(path)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise PluginError(f"{path} is not importable as a Python module.")
+
+    module = importlib.util.module_from_spec(spec)
+    # Register before executing: a module that inspects sys.modules[__name__]
+    # during import -- dataclasses and pickle both do -- otherwise fails.
+    sys.modules[module_name] = module
+    try:
         spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+
+
+def _contrib_module_name(path: Path) -> str:
+    """Derive a module name unique to this file's location.
+
+    Keying on the filename alone would give two plugin directories that both
+    contain `extra.py` the same module name. Their functions would then share
+    a ``__module__`` and ``__qualname__``, which :func:`_is_same_definition`
+    reads as a reload -- so the second would silently replace the first
+    instead of being reported as a name clash.
+    """
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+    stem = re.sub(r"\W", "_", path.stem)
+    return f"lbxd_contrib_{stem}_{digest}"

@@ -51,6 +51,11 @@ def build_app() -> typer.Typer:
             rich_help_panel=item.category.capitalize(),
         )(_build_command(item))
 
+    # The registry records broken plugin files rather than raising, so that one
+    # of them cannot stop the tool from starting. Say so, or they vanish.
+    for failure in registry.load_failures():
+        err_console.print(f"[yellow]Skipped plugin[/yellow] {failure}")
+
     return app
 
 
