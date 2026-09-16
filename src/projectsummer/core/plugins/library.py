@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from projectsummer.core.enrich import enrich_all
 from projectsummer.core.ingest import ingest_export
 from projectsummer.core.resolve import DEFAULT_DELAY, resolve_all
 from projectsummer.core.registry import plugin
@@ -59,3 +60,29 @@ def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> dict[str,
         Counts of what resolved, what failed, and what is still outstanding.
     """
     return resolve_all(limit=limit, delay=delay)
+
+
+@plugin(name="enrich", category="library")
+def enrich(limit: int | None = None) -> dict[str, Any]:
+    """Fetch film metadata from TMDB and build the queryable tables.
+
+    Run this after `resolve`. It fetches cast, crew, genres, runtime and
+    ratings for every resolved film, overlays your own viewing data, and
+    rebuilds your diary -- one row per viewing, so rewatches are kept.
+
+    Roughly a thousand films per minute. Safe to interrupt: a second run
+    fetches only what is still missing.
+
+    Needs a TMDB API token in TMDB_API_KEY. A free account provides one at
+    https://www.themoviedb.org/settings/api
+
+    Args:
+        limit: Only fetch this many films, for a trial run.
+
+    Returns:
+        Counts of what was fetched and built.
+
+    Raises:
+        MissingTokenError: If no TMDB token is configured.
+    """
+    return enrich_all(limit=limit)
