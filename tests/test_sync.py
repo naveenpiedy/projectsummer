@@ -204,12 +204,17 @@ def test_a_new_viewing_becomes_a_diary_entry(library):
 def test_a_viewing_already_imported_is_not_duplicated(library):
     """The export's Date and the feed's pubDate are different clocks, so
     matching on the full natural key would double-count."""
+    # The Shining has two viewings at different ratings, so order explicitly
+    # and echo back that entry's own rating -- otherwise "unchanged" depends
+    # on which row the database happened to return.
     existing = db.query(
-        "SELECT tmdb_id, watched_date FROM diary_entries WHERE tmdb_id = ? LIMIT 1",
+        "SELECT tmdb_id, watched_date, rating FROM diary_entries "
+        "WHERE tmdb_id = ? ORDER BY watched_date LIMIT 1",
         [SHINING_TMDB],
     )[0]
     item = watch_item(SHINING_TMDB, "Shining",
-                      watched=str(existing["watched_date"]), rating="4.5")
+                      watched=str(existing["watched_date"]),
+                      rating=str(existing["rating"]))
 
     report = sync_feed(username="someone", xml=feed(item), client=FakeClient())
 
@@ -219,7 +224,8 @@ def test_a_viewing_already_imported_is_not_duplicated(library):
 
 def test_a_changed_rating_updates_the_existing_entry(library):
     existing = db.query(
-        "SELECT tmdb_id, watched_date FROM diary_entries WHERE tmdb_id = ? LIMIT 1",
+        "SELECT tmdb_id, watched_date FROM diary_entries "
+        "WHERE tmdb_id = ? ORDER BY watched_date LIMIT 1",
         [SHINING_TMDB],
     )[0]
     item = watch_item(SHINING_TMDB, "Shining",
