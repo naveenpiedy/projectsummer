@@ -20,6 +20,7 @@ import importlib.util
 import inspect
 import os
 import pkgutil
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -43,15 +44,32 @@ class Plugin:
     category: str
     #: First line of the docstring -- a CLI help string / MCP tool summary.
     summary: str
-    #: Full docstring.
+    #: Full docstring, sections and all. What an LLM reads over MCP.
     description: str
+    #: Per-parameter help, parsed from the docstring's Args: section.
+    #: Becomes `--option` help in the CLI and argument descriptions over MCP.
+    param_help: Mapping[str, str]
+    #: Docstring with Args:/Returns:/Raises: stripped, for frontends that
+    #: render parameters themselves and would otherwise repeat them.
+    help_text: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
 
     @property
     def signature(self) -> inspect.Signature:
-        return inspect.signature(self.func)
+        """The function's signature, with string annotations resolved.
+
+        Plugin modules use ``from __future__ import annotations``, so hints
+        arrive as strings like ``'str | None'``. Both frontends need real
+        types to build a schema, so evaluate them here rather than twice.
+        """
+        try:
+            return inspect.signature(self.func, eval_str=True)
+        except (NameError, TypeError):
+            # A hint that only exists under TYPE_CHECKING; better an
+            # unresolved annotation than no signature at all.
+            return inspect.signature(self.func)
 
 
 _REGISTRY: dict[str, Plugin] = {}
@@ -93,16 +111,84 @@ def plugin(
             )
 
         doc = inspect.cleandoc(func.__doc__ or "")
+        summary, help_text, param_help = _parse_docstring(doc)
         _REGISTRY[plugin_name] = Plugin(
             name=plugin_name,
             func=func,
             category=category,
-            summary=doc.split("\n", 1)[0],
+            summary=summary,
             description=doc,
+            param_help=MappingProxyType(param_help),
+            help_text=help_text,
         )
         return func
 
     return decorator
+
+
+#: Docstring section headers recognised when splitting help from parameters.
+_SECTIONS = frozenset(
+    {"Args", "Arguments", "Parameters", "Returns", "Yields", "Raises", "Examples", "Example", "Note", "Notes"}
+)
+
+_PARAM_RE = re.compile(r"^(?P<name>\*{0,2}\w+)\s*(?:\([^)]*\))?\s*:\s*(?P<desc>.*)$")
+
+
+def _parse_docstring(doc: str) -> tuple[str, str, dict[str, str]]:
+    """Split a Google-style docstring into summary, prose and per-parameter help.
+
+    Written once here so the CLI and the MCP server describe a plugin's
+    parameters identically, from the same source: the docstring the author
+    already wrote.
+
+    Returns:
+        ``(summary, help_text, param_help)`` -- the first line, the prose with
+        every ``Section:`` block removed, and a name-to-description mapping
+        for the parameters documented under ``Args:``.
+    """
+    lines = doc.splitlines()
+    summary = lines[0].strip() if lines else ""
+
+    prose: list[str] = []
+    collected: dict[str, list[str]] = {}
+    in_args = False
+    in_section = False
+    base_indent: int | None = None
+    current: str | None = None
+
+    for line in lines:
+        stripped = line.strip()
+        header = stripped[:-1] if stripped.endswith(":") else None
+
+        if header in _SECTIONS and not line[:1].isspace():
+            in_args = header in ("Args", "Arguments", "Parameters")
+            in_section = True
+            base_indent = None
+            current = None
+            continue
+
+        if in_args:
+            if not stripped:
+                continue
+            indent = len(line) - len(line.lstrip())
+            if base_indent is None:
+                base_indent = indent
+            match = _PARAM_RE.match(stripped) if indent <= base_indent else None
+            if match:
+                current = match["name"].lstrip("*")
+                collected[current] = [match["desc"].strip()]
+            elif current is not None:
+                collected[current].append(stripped)
+            continue
+
+        if not in_section:
+            prose.append(line)
+
+    param_help = {
+        name: " ".join(part for part in parts if part).strip()
+        for name, parts in collected.items()
+    }
+    return summary, "\n".join(prose).strip(), param_help
 
 
 def _is_same_definition(old: Callable[..., Any], new: Callable[..., Any]) -> bool:

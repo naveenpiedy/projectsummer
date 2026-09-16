@@ -1,0 +1,211 @@
+"""Command-line interface, generated from the plugin registry.
+
+No command is written by hand. Every registered plugin becomes a subcommand
+whose options, types and help text come from its signature and docstring, so
+adding a feature to the registry adds it to the CLI.
+
+What this module contributes on top of the raw function is presentation:
+turning a returned value into a table or JSON, mapping domain errors onto exit
+codes, and grouping commands by category.
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+from datetime import date, datetime
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from letterboxd_utility_tools.core import db, registry
+from letterboxd_utility_tools.core.errors import LetterboxdError
+from letterboxd_utility_tools.core.registry import Plugin
+
+#: Parameter name used internally for the --json flag. Underscore-prefixed so
+#: it cannot collide with a plugin's own parameter.
+_JSON_FLAG = "_json_output"
+
+console = Console()
+err_console = Console(stderr=True)
+
+
+# ----------------------------------------------------------------- app
+
+def build_app() -> typer.Typer:
+    """Construct the Typer app, one command per registered plugin."""
+    app = typer.Typer(
+        name="letterboxd",
+        help="Query and explore your Letterboxd library.",
+        no_args_is_help=True,
+    )
+    app.callback()(_root)
+
+    for item in registry.discover().values():
+        app.command(
+            name=item.name.replace("_", "-"),
+            help=item.help_text,
+            rich_help_panel=item.category.capitalize(),
+        )(_build_command(item))
+
+    return app
+
+
+def _root(
+    database: Annotated[
+        Path | None,
+        typer.Option(
+            "--db",
+            metavar="PATH",
+            help="Database file to use. Defaults to your per-user data directory.",
+        ),
+    ] = None,
+) -> None:
+    """Query and explore your Letterboxd library."""
+    if database is not None:
+        db.get_connection(database)
+
+
+# ------------------------------------------------------- command building
+
+def _build_command(item: Plugin):
+    """Wrap a plugin in a Typer-compatible command.
+
+    Typer reads `inspect.signature`, so the wrapper advertises a synthesised
+    signature: the plugin's own parameters re-annotated as CLI arguments and
+    options, plus a `--json` flag. The plugin itself is untouched.
+    """
+    signature = item.signature
+    parameters = [
+        _as_cli_parameter(parameter, item.param_help.get(name, ""))
+        for name, parameter in signature.parameters.items()
+    ]
+    parameters.append(
+        inspect.Parameter(
+            _JSON_FLAG,
+            inspect.Parameter.KEYWORD_ONLY,
+            default=False,
+            annotation=Annotated[
+                bool,
+                typer.Option("--json", help="Emit raw JSON instead of a table."),
+            ],
+        )
+    )
+
+    def command(**kwargs: Any) -> None:
+        as_json = kwargs.pop(_JSON_FLAG, False)
+        try:
+            result = item.func(**kwargs)
+        except LetterboxdError as exc:
+            # Expected outcomes, not crashes: a clear message beats a traceback.
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from None
+        _render(result, as_json=as_json)
+
+    command.__name__ = item.name
+    command.__doc__ = item.help_text
+    command.__signature__ = signature.replace(
+        parameters=parameters, return_annotation=inspect.Signature.empty
+    )
+    return command
+
+
+def _as_cli_parameter(parameter: inspect.Parameter, help_text: str) -> inspect.Parameter:
+    """Re-annotate a plugin parameter as a CLI argument or option.
+
+    A parameter with no default is required, so it becomes a positional
+    argument. Anything with a default becomes a keyword-only `--option`, which
+    keeps callers from depending on parameter order.
+    """
+    if parameter.default is inspect.Parameter.empty:
+        return parameter.replace(
+            annotation=Annotated[parameter.annotation, typer.Argument(help=help_text)]
+        )
+    return parameter.replace(
+        kind=inspect.Parameter.KEYWORD_ONLY,
+        annotation=Annotated[parameter.annotation, typer.Option(help=help_text)],
+    )
+
+
+# ------------------------------------------------------------- rendering
+
+def _render(result: Any, *, as_json: bool) -> None:
+    """Print whatever a plugin returned."""
+    if result is None:
+        return
+
+    if as_json:
+        console.print_json(json.dumps(result, default=_json_fallback))
+        return
+
+    if isinstance(result, dict):
+        _render_record(result)
+    elif _is_row_list(result):
+        _render_rows(result)
+    else:
+        console.print(result)
+
+
+def _is_row_list(result: Any) -> bool:
+    return (
+        isinstance(result, list)
+        and bool(result)
+        and all(isinstance(row, dict) for row in result)
+    )
+
+
+def _render_record(record: dict[str, Any]) -> None:
+    """Render a single result as a field/value table."""
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="bold cyan")
+    table.add_column(overflow="fold")
+    for key, value in record.items():
+        table.add_row(_humanise(key), _format(value))
+    console.print(table)
+
+
+def _render_rows(rows: list[dict[str, Any]]) -> None:
+    """Render a list of results as a table, one row each."""
+    table = Table(header_style="bold cyan")
+    for key in rows[0]:
+        table.add_column(_humanise(key), overflow="fold")
+    for row in rows:
+        table.add_row(*(_format(value) for value in row.values()))
+    console.print(table)
+    console.print(f"[dim]{len(rows)} row{'s' if len(rows) != 1 else ''}[/dim]")
+
+
+def _humanise(key: str) -> str:
+    return key.replace("_", " ").capitalize()
+
+
+def _format(value: Any) -> str:
+    """Format a cell. LIST columns arrive as real Python lists."""
+    if value is None:
+        return "[dim]-[/dim]"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
+
+
+def _json_fallback(value: Any) -> str:
+    """Make dates and anything else exotic JSON-serialisable."""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
+
+
+def main() -> None:
+    """Console-script entry point."""
+    build_app()()
+
+
+if __name__ == "__main__":
+    main()

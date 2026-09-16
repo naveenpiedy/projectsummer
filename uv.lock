@@ -874,12 +874,10 @@ version = "2.0.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
-cli = [
-    { name = "typer" },
-]
 ingest = [
     { name = "beautifulsoup4" },
     { name = "feedparser" },
@@ -905,9 +903,9 @@ requires-dist = [
     { name = "python-dotenv", marker = "extra == 'ingest'", specifier = ">=1.0" },
     { name = "requests", marker = "extra == 'ingest'", specifier = ">=2.32" },
     { name = "tqdm", marker = "extra == 'ingest'", specifier = ">=4.66" },
-    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12" },
+    { name = "typer", specifier = ">=0.27.2" },
 ]
-provides-extras = ["cli", "mcp", "ingest"]
+provides-extras = ["mcp", "ingest"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]

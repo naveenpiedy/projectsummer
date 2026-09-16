@@ -7,10 +7,13 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "duckdb>=1.1",
+    "typer>=0.27.2",
 ]
 
+[project.scripts]
+letterboxd = "letterboxd_utility_tools.cli:main"
+
 [project.optional-dependencies]
-cli = ["typer>=0.12"]
 mcp = ["fastmcp>=2.13"]
 ingest = [
     "requests>=2.32",

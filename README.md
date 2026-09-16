@@ -4,9 +4,9 @@ Query, analyse and explore your own Letterboxd data — from a CLI, or from an
 LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
-> **Status: early development.** The plugin system, schema and database layer
-> work and are tested. Ingestion, the CLI and the MCP server are not built yet,
-> so there is currently no way to load your own data. See [Roadmap](#roadmap).
+> **Status: early development.** The plugin system, database layer and CLI
+> work and are tested. Ingestion is not built yet, so there is currently no way
+> to load your own data. See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -29,6 +29,22 @@ def random_watchlist_pick(genre: str | None = None) -> dict:
 The type hints *are* the schema. The CLI reads the signature to build a
 command; the MCP server reads the same signature to build a tool. Nothing is
 hand-written twice.
+
+That function becomes this, with no CLI code written for it:
+
+```console
+$ letterboxd random-watchlist-pick --genre horror
+Title                  The Others
+Year                   2001
+Runtime                101
+Genres                 Horror, Mystery
+Directors              Alejandro Amenabar
+Candidates considered  3
+```
+
+Parameter names become `--options`, type hints become validation, and the
+docstring's `Args:` section becomes each option's help text. Add `--json` to
+any command to get the raw result instead of a table.
 
 ## Adding your own features
 
@@ -77,10 +93,10 @@ uv run pytest
 - [x] DuckDB schema and connection layer
 - [x] Plugin registry with auto-discovery
 - [x] First plugin: random watchlist picker
+- [x] CLI
 - [ ] CSV export ingestion
 - [ ] TMDB enrichment
 - [ ] RSS polling
-- [ ] CLI
 - [ ] MCP server
 - [ ] Remaining plugins: trends, taste, lists, query
 
