@@ -8,6 +8,15 @@
 --     history is genuinely one-to-many, and streaks / rating drift / year-in-
 --     review cannot be computed from collapsed first/last dates.
 --   * All DDL is idempotent so `init_schema()` is safe to call on every open.
+--   * There are deliberately NO foreign keys. DuckDB 1.5 rejects updating a
+--     LIST column on a row that a foreign key references, when inside a
+--     transaction -- nested-type updates are implemented as delete-and-
+--     reinsert, which trips the constraint. Since `films` is the parent of
+--     everything AND is built out of LIST columns, enrichment refreshing a
+--     film's genres would fail as soon as any diary entry referenced it.
+--     Scalar and DATE updates are fine; VARCHAR[] updates are not. The
+--     `integrity_orphans` view below reports what the constraints would have
+--     prevented, and the test suite asserts against it.
 
 -- ============================================================ films
 
@@ -77,7 +86,7 @@ CREATE SEQUENCE IF NOT EXISTS diary_entry_id_seq;
 
 CREATE TABLE IF NOT EXISTS diary_entries (
     entry_id       BIGINT PRIMARY KEY DEFAULT nextval('diary_entry_id_seq'),
-    tmdb_id        BIGINT NOT NULL REFERENCES films (tmdb_id),
+    tmdb_id        BIGINT NOT NULL,
     watched_date   DATE,                   -- the day you saw it
     logged_date    DATE,                   -- the day you logged it
     rating         DOUBLE,                 -- rating *at the time of this watch*
@@ -114,9 +123,9 @@ CREATE TABLE IF NOT EXISTS lists (
 );
 
 CREATE TABLE IF NOT EXISTS list_entries (
-    list_id         BIGINT  NOT NULL REFERENCES lists (list_id),
+    list_id         BIGINT  NOT NULL,
     entry_position  INTEGER NOT NULL,      -- 1-based order within the list
-    tmdb_id         BIGINT REFERENCES films (tmdb_id),  -- NULL until resolved
+    tmdb_id         BIGINT,                -- NULL until resolved
     name            VARCHAR NOT NULL,      -- raw title, so unresolved rows survive
     year            INTEGER,
     letterboxd_uri  VARCHAR,
@@ -151,7 +160,90 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
 );
 
+-- ============================================================ staging
+
+-- Letterboxd exports identify films only by a boxd.it short link, while
+-- `films` is keyed by tmdb_id. Ingestion therefore lands here first, keyed by
+-- URI and needing no network, and enrichment resolves these into `films`.
+-- Keeping the tables makes the database self-contained: a failed or partial
+-- enrichment can resume without the original export folder.
+
+-- One row per distinct FILM uri, merged from watched / watchlist / ratings /
+-- likes. Those four files share a URI namespace, so they join cleanly.
+CREATE TABLE IF NOT EXISTS staging_films (
+    letterboxd_uri     VARCHAR PRIMARY KEY,
+    name               VARCHAR NOT NULL,
+    year               INTEGER,
+    watched            BOOLEAN NOT NULL DEFAULT FALSE,
+    watched_logged_on  DATE,
+    on_watchlist       BOOLEAN NOT NULL DEFAULT FALSE,
+    watchlist_added_on DATE,
+    liked              BOOLEAN NOT NULL DEFAULT FALSE,
+    liked_on           DATE,
+    my_rating          DOUBLE,
+    rated_on           DATE,
+    imported_at        TIMESTAMP NOT NULL DEFAULT current_timestamp
+);
+
+-- One row per diary entry. Note these carry *entry* URIs, one per viewing,
+-- which do not match the film URIs above -- diary and reviews live in a
+-- separate URI namespace. They are matched to films on (name, year), with
+-- URI resolution as the fallback.
+CREATE TABLE IF NOT EXISTS staging_diary (
+    entry_uri    VARCHAR PRIMARY KEY,
+    name         VARCHAR NOT NULL,
+    year         INTEGER,
+    watched_date DATE,
+    logged_date  DATE,
+    rating       DOUBLE,
+    rewatch      BOOLEAN NOT NULL DEFAULT FALSE,
+    tags         VARCHAR[],
+    review       VARCHAR,
+    imported_at  TIMESTAMP NOT NULL DEFAULT current_timestamp
+);
+
+-- ============================================================ film_identity
+
+-- Letterboxd URI -> slug -> TMDB/IMDb, the expensive part of enrichment.
+-- Lives in the database rather than a sidecar JSON file, so it survives and
+-- is reusable across re-exports. Slugs are the real identity: several URIs
+-- (short link, full link, a diary entry) can resolve to the same film.
+CREATE TABLE IF NOT EXISTS film_identity (
+    letterboxd_uri  VARCHAR PRIMARY KEY,
+    letterboxd_slug VARCHAR,
+    tmdb_id         BIGINT,
+    imdb_id         VARCHAR,
+    resolved_at     TIMESTAMP,
+    -- Last failure, so a retry can target only what actually broke.
+    error           VARCHAR
+);
+
+CREATE INDEX IF NOT EXISTS film_identity_slug ON film_identity (letterboxd_slug);
+
 -- ============================================================ views
+
+-- Dangling references, which foreign keys would have rejected outright had
+-- DuckDB allowed them here. Empty is healthy. A row appearing in this view
+-- means enrichment left something unresolved, or a merge ran out of order.
+CREATE OR REPLACE VIEW integrity_orphans AS
+SELECT 'diary_entries' AS source_table, 'tmdb_id' AS source_column,
+       d.tmdb_id AS missing_value, count(*) AS affected_rows
+FROM diary_entries d
+LEFT JOIN films f ON f.tmdb_id = d.tmdb_id
+WHERE f.tmdb_id IS NULL
+GROUP BY 1, 2, 3
+UNION ALL
+SELECT 'list_entries', 'list_id', e.list_id, count(*)
+FROM list_entries e
+LEFT JOIN lists l ON l.list_id = e.list_id
+WHERE l.list_id IS NULL
+GROUP BY 1, 2, 3
+UNION ALL
+SELECT 'list_entries', 'tmdb_id', e.tmdb_id, count(*)
+FROM list_entries e
+LEFT JOIN films f ON f.tmdb_id = e.tmdb_id
+WHERE e.tmdb_id IS NOT NULL AND f.tmdb_id IS NULL
+GROUP BY 1, 2, 3;
 
 -- Watch history rolled up per film. Derived, never written to -- the old
 -- schema's watch_count / first_watched_date / last_watched_date, but always

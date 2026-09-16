@@ -5,8 +5,9 @@ LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
 > **Status: early development.** The plugin system, database layer and CLI
-> work and are tested. Ingestion is not built yet, so there is currently no way
-> to load your own data. See [Roadmap](#roadmap).
+> work and are tested, and a CSV export can be ingested. TMDB enrichment is
+> not built yet, so films are not yet resolved to metadata. See
+> [Roadmap](#roadmap).
 
 ## How it works
 
@@ -94,7 +95,7 @@ uv run pytest
 - [x] Plugin registry with auto-discovery
 - [x] First plugin: random watchlist picker
 - [x] CLI
-- [ ] CSV export ingestion
+- [x] CSV export ingestion
 - [ ] TMDB enrichment
 - [ ] RSS polling
 - [ ] MCP server
