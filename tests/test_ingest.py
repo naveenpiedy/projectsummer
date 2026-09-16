@@ -1,9 +1,9 @@
 """Ingestion of a Letterboxd CSV export.
 
-The fixture below reproduces the export's real quirks in miniature: film-scoped
-and entry-scoped URI namespaces, a Rewatch column that is TRUE or blank but
-never FALSE, review text containing a comma and a newline, and list files
-holding two tables each.
+The export fixtures live in `export_fixture.py`, which reproduces the real
+format's quirks in miniature. The tests below cover what ingestion does with
+them, and -- crucially -- what happens for users whose data does *not* look
+like the one library this was developed against.
 """
 
 from __future__ import annotations
@@ -13,100 +13,20 @@ import pytest
 from letterboxd_utility_tools.core import db
 from letterboxd_utility_tools.core.ingest import (
     ExportNotFoundError,
+    MalformedExportError,
     ingest_export,
     parse_list_csv,
 )
 
-# Film-scoped URIs: shared by watched / ratings / watchlist / likes.
-SHINING = "https://boxd.it/film01"
-ALIEN = "https://boxd.it/film02"
-GODFATHER = "https://boxd.it/film03"
-UNSEEN = "https://boxd.it/film04"
-
-# Entry-scoped URIs: one per viewing, deliberately unlike the film URIs.
-ENTRY_1 = "https://boxd.it/entryA"
-ENTRY_2 = "https://boxd.it/entryB"
-ENTRY_3 = "https://boxd.it/entryC"
-
-
-def write_csv(path, text):
-    r"""Write a CSV the way Letterboxd does: CRLF everywhere.
-
-    Real exports contain zero bare line feeds, so a review or description
-    spanning lines carries \r\n inside the quoted value itself. Ingestion
-    is expected to normalise that away, and these tests pin it.
-    """
-    path.write_text(text.replace("\n", "\r\n"), encoding="utf-8", newline="")
-
-
-def write_export(root):
-    """Build a miniature but faithful Letterboxd export."""
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "likes").mkdir()
-    (root / "lists").mkdir()
-
-    write_csv(
-        root / "watched.csv",
-        "Date,Name,Year,Letterboxd URI\n"
-        f"2024-01-10,The Shining,1980,{SHINING}\n"
-        f"2024-02-11,Alien,1979,{ALIEN}\n"
-        f"2024-03-12,The Godfather,1972,{GODFATHER}\n",
-    )
-    write_csv(
-        root / "ratings.csv",
-        "Date,Name,Year,Letterboxd URI,Rating\n"
-        f"2024-01-10,The Shining,1980,{SHINING},4.5\n"
-        f"2024-03-12,The Godfather,1972,{GODFATHER},5\n",
-    )
-    write_csv(
-        root / "watchlist.csv",
-        "Date,Name,Year,Letterboxd URI\n"
-        f"2024-05-01,Solaris,1972,{UNSEEN}\n",
-    )
-    write_csv(
-        root / "likes" / "films.csv",
-        "Date,Name,Year,Letterboxd URI\n"
-        f"2024-01-11,The Shining,1980,{SHINING}\n",
-    )
-    # Rewatch is TRUE or blank -- Letterboxd never writes FALSE.
-    # The Shining appears twice: a first viewing and a later rewatch, rated
-    # differently. Tags are one quoted, comma-separated field.
-    write_csv(
-        root / "diary.csv",
-        "Date,Name,Year,Letterboxd URI,Rating,Rewatch,Tags,Watched Date\n"
-        f'2024-01-11,The Shining,1980,{ENTRY_1},4.5,,"horror, halloween",2024-01-10\n'
-        f"2024-02-12,Alien,1979,{ENTRY_2},,,,2024-02-11\n"
-        f"2024-03-13,The Shining,1980,{ENTRY_3},5,Yes,,2024-03-12\n",
-    )
-    # Review text with a comma and an embedded newline, as real exports have.
-    write_csv(
-        root / "reviews.csv",
-        "Date,Name,Year,Letterboxd URI,Rating,Rewatch,Review,Tags,Watched Date\n"
-        f'2024-02-12,Alien,1979,{ENTRY_2},,,"Slow, and\nbetter for it.",,2024-02-11\n',
-    )
-    write_csv(
-        root / "profile.csv",
-        "Date Joined,Username,Given Name,Family Name,Email Address,Location,"
-        "Website,Bio,Pronoun,Favorite Films\n"
-        "2019-10-03,someone,Some,One,secret@example.com,Chennai,"
-        f'https://example.com,,They / them,"{SHINING}, {ALIEN}"\n',
-    )
-    write_csv(
-        root / "lists" / "favourites.csv",
-        "Letterboxd list export v7\n"
-        "Date,Name,Tags,URL,Description\n"
-        '2021-11-06,My Favourites,"best, rewatchable",https://boxd.it/list1,"A list,\nover two lines."\n'
-        "\n"
-        "Position,Name,Year,URL,Description\n"
-        f"1,The Shining,1980,{SHINING},\n"
-        f"2,Alien,1979,{ALIEN},Still holds up\n",
-    )
-    return root
-
-
-@pytest.fixture
-def export(tmp_path):
-    return write_export(tmp_path / "export")
+from export_fixture import (
+    ALIEN,
+    ENTRY_1,
+    ENTRY_2,
+    SHINING,
+    UNSEEN,
+    write_csv,
+    write_minimal_export,
+)
 
 
 # ------------------------------------------------------------------ loading
@@ -297,3 +217,123 @@ def test_imported_lists_survive_a_reingest(empty_conn, export):
 
     sources = {row["source"] for row in db.query("SELECT source FROM lists")}
     assert sources == {"letterboxd", "imported"}
+
+
+# ------------------------------------------------- data-dependent CSV typing
+#
+# read_csv_auto infers a column's type from its contents, so a column that
+# happens to be empty in one person's export comes back VARCHAR instead of
+# BOOLEAN or DOUBLE. Every case below crashed ingestion before the reader was
+# changed to read text and cast explicitly. None of them are exotic -- they
+# are just libraries that differ from the one this was written against.
+
+def test_a_user_who_has_never_rewatched_anything_can_ingest(empty_conn, tmp_path):
+    root = write_minimal_export(
+        tmp_path / "e", f"2024-01-11,A Film,1980,{ENTRY_1},4,,,2024-01-10\n"
+    )
+    report = ingest_export(root)
+
+    assert report.diary_entries == 1
+    assert db.query("SELECT rewatch FROM staging_diary")[0]["rewatch"] is False
+
+
+def test_a_user_who_rates_nothing_can_ingest(empty_conn, tmp_path):
+    root = write_minimal_export(
+        tmp_path / "e", f"2024-01-11,A Film,1980,{ENTRY_1},,,,2024-01-10\n"
+    )
+    report = ingest_export(root)
+
+    assert report.diary_entries == 1
+    assert db.query("SELECT rating FROM staging_diary")[0]["rating"] is None
+
+
+def test_every_optional_column_blank_still_ingests(empty_conn, tmp_path):
+    root = write_minimal_export(
+        tmp_path / "e", f"2024-01-11,A Film,,{ENTRY_1},,,,\n"
+    )
+    report = ingest_export(root)
+
+    row = db.query("SELECT * FROM staging_diary")[0]
+    assert report.diary_entries == 1
+    assert row["year"] is None
+    assert row["rating"] is None
+    assert row["watched_date"] is None
+    assert row["rewatch"] is False
+    assert row["tags"] is None
+
+
+def test_unparseable_values_become_null_rather_than_failing(empty_conn, tmp_path):
+    """try_cast, not cast: one malformed row must not abort the whole import."""
+    root = write_minimal_export(
+        tmp_path / "e",
+        f"2024-01-11,A Film,nineteen-eighty,{ENTRY_1},rubbish,perhaps,,not-a-date\n",
+    )
+    ingest_export(root)
+
+    row = db.query("SELECT * FROM staging_diary")[0]
+    assert row["year"] is None
+    assert row["rating"] is None
+    assert row["watched_date"] is None
+    assert row["rewatch"] is False  # unparseable is not truthy
+
+
+def test_rewatch_yes_is_understood(empty_conn, tmp_path):
+    """Letterboxd writes the literal string 'Yes', not 'true' or '1'."""
+    root = write_minimal_export(
+        tmp_path / "e", f"2024-01-11,A Film,1980,{ENTRY_1},4,Yes,,2024-01-10\n"
+    )
+    ingest_export(root)
+    assert db.query("SELECT rewatch FROM staging_diary")[0]["rewatch"] is True
+
+
+def test_ratings_keep_their_half_star_precision(empty_conn, tmp_path):
+    root = write_minimal_export(
+        tmp_path / "e", f"2024-01-11,A Film,1980,{ENTRY_1},4.5,,,2024-01-10\n"
+    )
+    ingest_export(root)
+    assert db.query("SELECT rating FROM staging_diary")[0]["rating"] == 4.5
+
+
+# ---------------------------------------------------------- malformed input
+
+def test_a_missing_column_names_the_file_and_the_column(empty_conn, tmp_path):
+    root = tmp_path / "e"
+    root.mkdir()
+    # 'Rewatch' omitted entirely.
+    write_csv(
+        root / "diary.csv",
+        "Date,Name,Year,Letterboxd URI,Rating,Tags,Watched Date\n"
+        f"2024-01-11,A Film,1980,{ENTRY_1},4,,2024-01-10\n",
+    )
+
+    with pytest.raises(MalformedExportError) as error:
+        ingest_export(root)
+    assert "diary.csv" in str(error.value)
+    assert "Rewatch" in str(error.value)
+
+
+def test_a_failed_ingest_leaves_no_partial_data(empty_conn, export):
+    """The whole import is one transaction, so a late failure rolls it back."""
+    ingest_export(export)
+    before = db.query("SELECT count(*) AS n FROM staging_diary")[0]["n"]
+
+    # Break diary.csv so the second run fails partway through.
+    write_csv(export / "diary.csv", "Date,Name,Letterboxd URI\n2024-01-01,X,u\n")
+    with pytest.raises(MalformedExportError):
+        ingest_export(export)
+
+    assert db.query("SELECT count(*) AS n FROM staging_diary")[0]["n"] == before
+
+
+def test_stale_staging_rows_are_cleared_when_film_sources_vanish(empty_conn, export):
+    """The 'replaced wholesale' promise has to hold even in the empty case."""
+    ingest_export(export)
+    assert db.query("SELECT count(*) AS n FROM staging_films")[0]["n"] == 4
+
+    for name in ("watched.csv", "ratings.csv", "watchlist.csv"):
+        (export / name).unlink()
+    (export / "likes" / "films.csv").unlink()
+
+    report = ingest_export(export)
+    assert report.films == 0
+    assert db.query("SELECT count(*) AS n FROM staging_films")[0]["n"] == 0

@@ -39,6 +39,24 @@ _FILM_SOURCES: tuple[tuple[str, str, bool], ...] = (
 #: Separator Letterboxd uses inside its multi-value CSV fields.
 _TAG_SPLIT = ","
 
+#: Every CSV is read as text and cast explicitly, never sniffed.
+#:
+#: `read_csv_auto` infers a column's type from its *contents*, so an entirely
+#: empty column comes back VARCHAR. A user who has never logged a rewatch gets
+#: a VARCHAR `Rewatch`, and `coalesce(Rewatch, FALSE)` then fails to bind --
+#: ingestion that works on one person's library crashes on another's. Reading
+#: everything as VARCHAR makes the types independent of the data, and
+#: `try_cast` turns anything unparseable into NULL instead of an error.
+_READ_CSV = "read_csv(?, all_varchar = true, header = true)"
+
+#: Columns the film-scoped exports must provide.
+_FILM_FILE_COLUMNS = frozenset({"Date", "Name", "Year", "Letterboxd URI"})
+
+#: Columns diary.csv must provide.
+_DIARY_FILE_COLUMNS = frozenset(
+    {"Date", "Name", "Year", "Letterboxd URI", "Rating", "Rewatch", "Tags", "Watched Date"}
+)
+
 #: SQL that strips carriage returns from a text column. Letterboxd exports are
 #: CRLF throughout, so a review or description spanning lines arrives with
 #: \r\n embedded in the value itself. Left alone, those carriage returns leak
@@ -48,6 +66,10 @@ _STRIP_CR = "replace({column}, chr(13), '')"
 
 class ExportNotFoundError(LetterboxdError):
     """The given directory does not look like a Letterboxd export."""
+
+
+class MalformedExportError(LetterboxdError):
+    """An export file is missing columns this code depends on."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +147,12 @@ def ingest_export(export_dir: str | Path) -> IngestReport:
         profile = _ingest_profile(conn, directory, skipped)
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        try:
+            conn.execute("ROLLBACK")
+        except duckdb.Error:
+            # DuckDB may have aborted the transaction already. Swallowing this
+            # keeps the original failure as the one that reaches the caller.
+            pass
         raise
 
     return IngestReport(
@@ -166,20 +193,31 @@ def _ingest_film_sources(
         if not path.exists():
             skipped.append(f"{filename} (not present)")
             continue
-        rating = '"Rating"' if has_rating else "NULL::DOUBLE"
+
+        required = _FILM_FILE_COLUMNS | ({"Rating"} if has_rating else set())
+        _require_columns(conn, path, required, filename)
+
+        rating = 'try_cast("Rating" AS DOUBLE)' if has_rating else "NULL::DOUBLE"
         selects.append(
             f"""
-            SELECT "Letterboxd URI" AS uri, "Name" AS name, "Year" AS year,
-                   "Date" AS on_date, {rating} AS rating, '{source}' AS source
-            FROM read_csv_auto(?)
+            SELECT "Letterboxd URI" AS uri,
+                   "Name" AS name,
+                   try_cast("Year" AS INTEGER) AS year,
+                   try_cast("Date" AS DATE) AS on_date,
+                   {rating} AS rating,
+                   '{source}' AS source
+            FROM {_READ_CSV}
             """
         )
         params.append(str(path))
 
+    # Before the early return: a re-ingest whose export no longer has any
+    # film-scoped CSVs must still clear what the previous one left behind.
+    conn.execute("DELETE FROM staging_films")
+
     if not selects:
         return 0
 
-    conn.execute("DELETE FROM staging_films")
     conn.execute(
         f"""
         INSERT INTO staging_films (
@@ -224,12 +262,17 @@ def _ingest_diary(
         skipped.append("diary.csv (not present)")
         return 0
 
+    _require_columns(conn, diary_path, _DIARY_FILE_COLUMNS, "diary.csv")
+
     reviews_path = directory / "reviews.csv"
     params: list[str] = [str(diary_path)]
 
     if reviews_path.exists():
+        _require_columns(conn, reviews_path, {"Letterboxd URI", "Review"}, "reviews.csv")
         review_select = _STRIP_CR.format(column='r."Review"')
-        review_join = 'LEFT JOIN read_csv_auto(?) r ON r."Letterboxd URI" = d."Letterboxd URI"'
+        review_join = (
+            f'LEFT JOIN {_READ_CSV} r ON r."Letterboxd URI" = d."Letterboxd URI"'
+        )
         params.append(str(reviews_path))
     else:
         skipped.append("reviews.csv (not present)")
@@ -246,18 +289,18 @@ def _ingest_diary(
         SELECT
             d."Letterboxd URI",
             d."Name",
-            d."Year",
-            d."Watched Date",
-            d."Date",
-            d."Rating",
-            -- Letterboxd writes TRUE or nothing, never FALSE.
-            coalesce(d."Rewatch", FALSE),
+            try_cast(d."Year" AS INTEGER),
+            try_cast(d."Watched Date" AS DATE),
+            try_cast(d."Date" AS DATE),
+            try_cast(d."Rating" AS DOUBLE),
+            -- Letterboxd writes 'Yes' or nothing, never a falsey value.
+            coalesce(try_cast(d."Rewatch" AS BOOLEAN), FALSE),
             CASE
                 WHEN d."Tags" IS NULL OR trim(d."Tags") = '' THEN NULL
                 ELSE list_transform(string_split(d."Tags", '{_TAG_SPLIT}'), t -> trim(t))
             END,
             {review_select}
-        FROM read_csv_auto(?) d
+        FROM {_READ_CSV} d
         {review_join}
         """,
         params,
@@ -506,6 +549,33 @@ def _ingest_profile(
 
 
 # ------------------------------------------------------------------ helpers
+
+def _require_columns(
+    conn: duckdb.DuckDBPyConnection,
+    path: Path,
+    required: set[str] | frozenset[str],
+    label: str,
+) -> None:
+    """Check an export file has the columns this code reads.
+
+    Without this, a missing column surfaces as a DuckDB binder error naming an
+    internal query rather than the file the user needs to look at.
+
+    Raises:
+        MalformedExportError: If any required column is absent.
+    """
+    described = conn.execute(
+        f"DESCRIBE SELECT * FROM {_READ_CSV}", [str(path)]
+    ).fetchall()
+    found = {row[0] for row in described}
+
+    missing = sorted(set(required) - found)
+    if missing:
+        raise MalformedExportError(
+            f"{label} is missing expected column(s): {', '.join(missing)}. "
+            f"Found: {', '.join(sorted(found))}. Is this a Letterboxd export?"
+        )
+
 
 def _count(conn: duckdb.DuckDBPyConnection, table: str) -> int:
     return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]

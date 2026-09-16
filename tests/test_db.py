@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import duckdb
 import pytest
 
 from letterboxd_utility_tools.core import db
+from letterboxd_utility_tools.core.errors import EmptyDatabaseError
 
 
 def test_schema_is_idempotent(empty_conn):
@@ -103,3 +105,75 @@ def test_duplicate_watch_is_rejected(conn):
 def test_reopening_a_different_database_requires_closing(conn):
     with pytest.raises(RuntimeError, match="already open"):
         db.get_connection("some/other.duckdb")
+
+
+# ------------------------------------------------------------ schema version
+#
+# Every DDL statement is CREATE ... IF NOT EXISTS, so an existing table is
+# left untouched. Applying a newer schema over an older database would half
+# work: new tables appear, changed ones silently do not, and the failure
+# surfaces later as an unintelligible binder error about a missing column.
+
+def test_a_fresh_database_records_the_current_version(empty_conn):
+    assert db.schema_version(empty_conn) == db.SCHEMA_VERSION
+
+
+def test_an_empty_database_has_no_version_yet():
+    raw = duckdb.connect(":memory:")
+    assert db.schema_version(raw) is None
+
+
+def test_a_database_predating_version_tracking_reports_zero():
+    raw = duckdb.connect(":memory:")
+    raw.execute("CREATE TABLE films (tmdb_id BIGINT PRIMARY KEY)")
+    assert db.schema_version(raw) == "0"
+
+
+def test_opening_an_older_database_is_refused_with_a_clear_message():
+    raw = duckdb.connect(":memory:")
+    raw.execute("CREATE TABLE films (tmdb_id BIGINT PRIMARY KEY)")
+
+    with pytest.raises(db.SchemaVersionError) as error:
+        db.init_schema(raw)
+
+    message = str(error.value)
+    assert "schema version 0" in message
+    assert db.SCHEMA_VERSION in message
+    assert "delet" in message.lower()  # tells the user what to actually do
+
+
+def test_a_database_at_the_current_version_reinitialises_cleanly(empty_conn):
+    db.init_schema(empty_conn)
+    db.init_schema(empty_conn)
+    assert db.schema_version(empty_conn) == db.SCHEMA_VERSION
+
+
+# -------------------------------------------------------------- library state
+
+def test_library_state_is_empty_before_anything_is_imported(empty_conn):
+    assert db.library_state() == "empty"
+
+
+def test_library_state_is_staged_after_ingestion_before_enrichment(empty_conn):
+    empty_conn.execute(
+        "INSERT INTO staging_films (letterboxd_uri, name, year) "
+        "VALUES ('https://boxd.it/x', 'Solaris', 1972)"
+    )
+    assert db.library_state() == "staged"
+
+
+def test_library_state_is_ready_once_films_are_populated(conn):
+    assert db.library_state() == "ready"
+    db.require_films()  # must not raise
+
+
+def test_require_films_names_the_right_next_step(empty_conn):
+    with pytest.raises(EmptyDatabaseError, match="Import a Letterboxd export"):
+        db.require_films()
+
+    empty_conn.execute(
+        "INSERT INTO staging_films (letterboxd_uri, name, year) "
+        "VALUES ('https://boxd.it/x', 'Solaris', 1972)"
+    )
+    with pytest.raises(EmptyDatabaseError, match="not enriched yet"):
+        db.require_films()

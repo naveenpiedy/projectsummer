@@ -71,7 +71,19 @@ def _root(
 ) -> None:
     """Query and explore your Letterboxd library."""
     if database is not None:
-        db.get_connection(database)
+        try:
+            db.get_connection(database)
+        except LetterboxdError as exc:
+            # Opening the database can fail for expected reasons -- a schema
+            # this version cannot read, for one. The command wrapper below
+            # never sees those, because they happen before it runs.
+            raise _fail(exc) from None
+
+
+def _fail(exc: LetterboxdError) -> typer.Exit:
+    """Report an expected failure as a message, and exit non-zero."""
+    err_console.print(f"[red]{exc}[/red]")
+    return typer.Exit(code=1)
 
 
 # ------------------------------------------------------- command building
@@ -106,8 +118,7 @@ def _build_command(item: Plugin):
             result = item.func(**kwargs)
         except LetterboxdError as exc:
             # Expected outcomes, not crashes: a clear message beats a traceback.
-            err_console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=1) from None
+            raise _fail(exc) from None
         _render(result, as_json=as_json)
 
     command.__name__ = item.name
@@ -194,7 +205,8 @@ def _format(value: Any) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, (list, tuple)):
-        return ", ".join(str(item) for item in value)
+        # An empty list is absence, and should read like one.
+        return ", ".join(str(item) for item in value) if value else "[dim]-[/dim]"
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)
@@ -209,7 +221,13 @@ def _json_fallback(value: Any) -> str:
 
 def main() -> None:
     """Console-script entry point."""
-    build_app()()
+    try:
+        build_app()()
+    except LetterboxdError as exc:
+        # Backstop for anything raised while the app is being built, before
+        # any command or callback could have caught it.
+        err_console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

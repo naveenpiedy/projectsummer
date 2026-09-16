@@ -59,5 +59,15 @@ def test_no_match_names_the_offending_filters(conn):
 
 
 def test_empty_database_is_distinguished_from_no_match(empty_conn):
-    with pytest.raises(EmptyDatabaseError, match="Run ingestion"):
+    with pytest.raises(EmptyDatabaseError, match="Import a Letterboxd export"):
+        random_watchlist_pick()
+
+
+def test_staged_but_unenriched_says_to_enrich_not_to_import(empty_conn):
+    """The message must not tell someone to do what they just did."""
+    empty_conn.execute(
+        "INSERT INTO staging_films (letterboxd_uri, name, year) "
+        "VALUES ('https://boxd.it/x', 'Solaris', 1972)"
+    )
+    with pytest.raises(EmptyDatabaseError, match="not enriched yet"):
         random_watchlist_pick()

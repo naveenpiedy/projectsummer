@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from export_fixture import write_export
 from letterboxd_utility_tools.core import db
 
 # tmdb_id, title, year, runtime, genres, directors, on_watchlist, watched
@@ -45,3 +46,9 @@ def empty_conn():
     connection = db.get_connection(":memory:")
     yield connection
     db.close_connection()
+
+
+@pytest.fixture
+def export(tmp_path):
+    """A miniature Letterboxd export on disk. See `export_fixture`."""
+    return write_export(tmp_path / "export")

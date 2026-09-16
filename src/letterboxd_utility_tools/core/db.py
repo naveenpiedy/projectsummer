@@ -19,9 +19,23 @@ from typing import Any
 import duckdb
 
 from letterboxd_utility_tools import config
+from letterboxd_utility_tools.core.errors import EmptyDatabaseError, LetterboxdError
 
-#: Bumped whenever schema.sql changes in a way that needs a migration.
-SCHEMA_VERSION = "1"
+#: Bumped whenever schema.sql changes in a way an existing database cannot
+#: simply absorb. The DDL is all CREATE ... IF NOT EXISTS, so an existing
+#: table is left exactly as it is -- a changed column would otherwise be
+#: silently ignored, and the next statement referencing it would fail with an
+#: incomprehensible binder error.
+#:
+#: 1: initial schema.
+#: 2: staging tables + film_identity added; foreign keys removed (DuckDB
+#:    rejects LIST-column updates on referenced rows inside a transaction).
+SCHEMA_VERSION = "2"
+
+
+class SchemaVersionError(LetterboxdError):
+    """The database was built by an incompatible version of the schema."""
+
 
 _SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 
@@ -33,8 +47,24 @@ _connection_path: Path | None = None
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """Create every table, index and view if it does not already exist.
 
-    Idempotent: safe to run against a fresh file or a fully populated one.
+    Idempotent for a database already at :data:`SCHEMA_VERSION`, so it is safe
+    to run on every open.
+
+    Raises:
+        SchemaVersionError: If the database was built by a different version
+            of this schema. There is no migration tooling yet, and applying
+            the current DDL over an older layout would half-work: new tables
+            would appear while changed ones stayed as they were.
     """
+    existing = schema_version(conn)
+    if existing is not None and existing != SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"This database uses schema version {existing}, but this version "
+            f"of the tool expects {SCHEMA_VERSION}. There is no automatic "
+            f"migration yet. Re-create it by deleting the file and running "
+            f"ingestion again, or point LETTERBOXD_DB at a different path."
+        )
+
     conn.execute(_SCHEMA_SQL.read_text(encoding="utf-8"))
     conn.execute(
         """
@@ -44,6 +74,32 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         """,
         [SCHEMA_VERSION],
     )
+
+
+def schema_version(conn: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the schema version a database was built with.
+
+    Returns:
+        The recorded version; ``"0"`` for a database that predates version
+        tracking but already holds tables; or ``None`` for an empty database,
+        which is free to become whatever the current schema says.
+    """
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+    if not tables:
+        return None
+    if "sync_state" not in tables:
+        return "0"
+
+    recorded = conn.execute(
+        "SELECT value FROM sync_state WHERE key = 'schema_version'"
+    ).fetchone()
+    return recorded[0] if recorded else "0"
 
 
 def get_connection(
@@ -101,6 +157,48 @@ def close_connection() -> None:
             _connection.close()
         _connection = None
         _connection_path = None
+
+
+def library_state() -> str:
+    """How far through the pipeline this database has got.
+
+    Returns:
+        ``"empty"`` if nothing has been imported, ``"staged"`` if an export
+        was ingested but not yet enriched (so `films` is still empty), or
+        ``"ready"`` if `films` is populated.
+    """
+    with _lock:
+        conn = get_connection()
+        if conn.execute("SELECT count(*) FROM films").fetchone()[0]:
+            return "ready"
+        if conn.execute("SELECT count(*) FROM staging_films").fetchone()[0]:
+            return "staged"
+        return "empty"
+
+
+def require_films() -> None:
+    """Fail with an accurate next step if `films` has nothing queryable in it.
+
+    Telling someone to run ingestion when they have just run it successfully
+    is worse than saying nothing, so the two unfinished states are reported
+    differently.
+
+    Raises:
+        EmptyDatabaseError: If no enriched films are available.
+    """
+    state = library_state()
+    if state == "ready":
+        return
+    if state == "staged":
+        raise EmptyDatabaseError(
+            "Your export has been imported but not enriched yet, so no film "
+            "metadata is available. Run enrichment to resolve films against "
+            "TMDB."
+        )
+    raise EmptyDatabaseError(
+        "No data in this database yet. Import a Letterboxd export first, "
+        "then run enrichment."
+    )
 
 
 def query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:

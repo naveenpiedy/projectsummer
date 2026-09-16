@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from letterboxd_utility_tools.core import db
-from letterboxd_utility_tools.core.errors import EmptyDatabaseError, NoResultError
+from letterboxd_utility_tools.core.errors import NoResultError
 from letterboxd_utility_tools.core.registry import plugin
 
 #: Columns returned for a picked film. Kept in one place so every discovery
@@ -47,8 +47,9 @@ def random_watchlist_pick(
 
     Raises:
         NoResultError: If no watchlist film matches the filters.
-        EmptyDatabaseError: If no films have been ingested yet.
+        EmptyDatabaseError: If no enriched films are available yet.
     """
+    db.require_films()
     conn = db.get_connection()
 
     conditions = ["on_watchlist", "NOT watched"]
@@ -80,12 +81,6 @@ def random_watchlist_pick(
     rows = db.query(sql, params)
     if rows:
         return rows[0]
-
-    if not db.query("SELECT 1 FROM films LIMIT 1"):
-        raise EmptyDatabaseError(
-            "No films in the database yet. Run ingestion on a Letterboxd "
-            "export first."
-        )
 
     raise NoResultError(_describe_no_match(genre, max_runtime))
 

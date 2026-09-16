@@ -16,4 +16,8 @@ __pycache__/
 data/
 exports/
 scrape_cache.json
+
+# Letterboxd exports, zipped or unzipped
+*.zip
+letterboxd-*/
 *.log
