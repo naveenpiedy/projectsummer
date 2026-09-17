@@ -22,3 +22,7 @@ class EmptyDatabaseError(LetterboxdError):
 
 class NoDatabaseError(LetterboxdError):
     """An explicitly named database file does not exist."""
+
+
+class DatabaseBusyError(LetterboxdError):
+    """Another process holds the database file's lock."""

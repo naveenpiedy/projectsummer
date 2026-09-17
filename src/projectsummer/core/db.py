@@ -1,25 +1,45 @@
 """DuckDB connection management and schema bootstrap.
 
-A user's whole library is one DuckDB file. This module owns the single
-connection to it so that plugins never have to think about paths, and so the
-CLI and the MCP server share exactly the same handle.
+A user's whole library is one DuckDB file. This module owns the connection to
+it so that plugins never have to think about paths: they call
+:func:`get_connection` or :func:`query`, and get whichever connection the
+frontend running them has arranged.
 
-DuckDB allows only one read-write process per database file. Opening a second
-writer (e.g. running the MCP server while the CLI ingests) raises an IO error;
-read-only connections may be shared freely. `read_only=True` is the right
-choice for anything that only queries.
+There are two arrangements:
+
+* **The process-wide connection**, opened on first use and held until the
+  process exits. Right for the CLI, where a process is one command.
+* **A session** (:func:`session`), opened for one unit of work and closed
+  straight after. Right for the MCP server, which lives as long as the chat
+  client that started it.
+
+The difference matters because of how DuckDB locks the file. While a process
+holds a read-write connection, *no other process can open the file at all* --
+not even read-only. (Several processes that all open read-only may share it.)
+A long-lived server holding the process-wide connection would lock the user
+out of `summer sync` for as long as their chat client stayed open. A session
+holds the lock only while a tool call is actually running.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from projectsummer import config
-from projectsummer.core.errors import EmptyDatabaseError, LetterboxdError
+from projectsummer.core.errors import (
+    DatabaseBusyError,
+    EmptyDatabaseError,
+    LetterboxdError,
+    NoDatabaseError,
+)
 
 #: Bumped whenever schema.sql changes in a way an existing database cannot
 #: simply absorb. The DDL is all CREATE ... IF NOT EXISTS, so an existing
@@ -39,9 +59,39 @@ class SchemaVersionError(LetterboxdError):
 
 _SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 
+#: Settings for every read-only connection. `read_only` alone stops writes to
+#: the database, but not to the filesystem: `COPY films TO 'x.csv'` still
+#: succeeds, and `read_csv` can read any file the user can. Disabling external
+#: access closes both, along with ATTACH and extension loading, and locking the
+#: configuration stops a query from simply turning it back on with SET.
+READ_ONLY_CONFIG: dict[str, Any] = {
+    "enable_external_access": False,
+    "lock_configuration": True,
+}
+
 _lock = threading.RLock()
 _connection: duckdb.DuckDBPyConnection | None = None
 _connection_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Session:
+    connection: duckdb.DuckDBPyConnection
+    path: Path
+
+
+#: The session active in the current context, if any. A ContextVar rather than
+#: a global because the MCP server runs tool calls on worker threads: each
+#: call must see its own connection, never one opened by a call running
+#: alongside it. A thread started from inside a session does not inherit it,
+#: and falls back to the process-wide connection.
+_session: ContextVar[_Session | None] = ContextVar("projectsummer_db_session", default=None)
+
+#: Serialises sessions within a process. DuckDB refuses to open one file twice
+#: in the same process with different settings, so a read-only session and a
+#: read-write one cannot overlap. Tool calls against a local library take
+#: milliseconds, so taking turns costs nothing noticeable.
+_session_lock = threading.Lock()
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -57,13 +107,8 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             would appear while changed ones stayed as they were.
     """
     existing = schema_version(conn)
-    if existing is not None and existing != SCHEMA_VERSION:
-        raise SchemaVersionError(
-            f"This database uses schema version {existing}, but this version "
-            f"of the tool expects {SCHEMA_VERSION}. There is no automatic "
-            f"migration yet. Re-create it by deleting the file and running "
-            f"ingestion again, or point LETTERBOXD_DB at a different path."
-        )
+    if existing is not None:
+        _require_current_version(existing)
 
     conn.execute(_SCHEMA_SQL.read_text(encoding="utf-8"))
     conn.execute(
@@ -74,6 +119,16 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         """,
         [SCHEMA_VERSION],
     )
+
+
+def _require_current_version(existing: str) -> None:
+    if existing != SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"This database uses schema version {existing}, but this version "
+            f"of the tool expects {SCHEMA_VERSION}. There is no automatic "
+            f"migration yet. Re-create it by deleting the file and running "
+            f"ingestion again, or point LETTERBOXD_DB at a different path."
+        )
 
 
 def schema_version(conn: duckdb.DuckDBPyConnection) -> str | None:
@@ -107,19 +162,34 @@ def get_connection(
     *,
     read_only: bool = False,
 ) -> duckdb.DuckDBPyConnection:
-    """Return the process-wide DuckDB connection, opening it on first use.
+    """Return the connection plugin code should use.
+
+    Inside a :func:`session`, that is the session's connection. Otherwise it
+    is the process-wide connection, opened on first use.
 
     Args:
         path: Database file to open. Defaults to :func:`config.db_path`.
             Pass ``":memory:"`` for an ephemeral database.
-        read_only: Open without write access. Lets several processes read the
-            same file concurrently. Ignored for in-memory databases, and
-            ignored entirely if a connection is already open.
+        read_only: Open without write access -- see :func:`session` for what
+            that enforces. Ignored for in-memory databases, and ignored
+            entirely if a connection is already open.
 
     Returns:
-        The shared connection, with the schema already applied.
+        The connection, with the schema already applied or checked.
+
+    Raises:
+        RuntimeError: If `path` names a different database from the one
+            already open.
     """
     global _connection, _connection_path
+
+    current = _session.get()
+    if current is not None:
+        if path is not None and Path(path) != current.path:
+            raise RuntimeError(
+                f"A session on {current.path} is active; cannot open {path} inside it."
+            )
+        return current.connection
 
     with _lock:
         target = Path(path) if path is not None else config.db_path()
@@ -133,16 +203,123 @@ def get_connection(
             return _connection
 
         in_memory = str(target) == ":memory:"
-        if not in_memory:
-            target.parent.mkdir(parents=True, exist_ok=True)
-
-        conn = duckdb.connect(str(target), read_only=read_only and not in_memory)
-        if not read_only or in_memory:
-            init_schema(conn)
-
-        _connection = conn
+        _connection = _open(target, read_only=read_only and not in_memory)
         _connection_path = target
-        return conn
+        return _connection
+
+
+@contextmanager
+def session(
+    path: str | Path | None = None,
+    *,
+    read_only: bool = False,
+) -> Iterator[duckdb.DuckDBPyConnection]:
+    """Open a connection for one unit of work, and close it afterwards.
+
+    While the block runs, :func:`get_connection` and :func:`query` return this
+    connection, so plugin code needs no changes to run inside one. Closing it
+    releases DuckDB's file lock, so other processes can use the database
+    between sessions.
+
+    A read-only session is enforced by DuckDB rather than trusted to the code
+    running in it: any statement that writes to the database fails, and so
+    does anything that touches the filesystem -- `COPY ... TO`, `ATTACH`,
+    `read_csv`, installing extensions.
+
+        with db.session(read_only=True):
+            rows = db.query("SELECT title FROM films")
+
+    Args:
+        path: Database file to open. Defaults to :func:`config.db_path`.
+        read_only: Open without any ability to write.
+
+    Yields:
+        The session's connection.
+
+    Raises:
+        NoDatabaseError: If `read_only` and the file does not exist. A
+            read-write session creates it instead.
+        EmptyDatabaseError: If `read_only` and nothing has been imported yet,
+            so there are no tables to read.
+        SchemaVersionError: If the database was built by an incompatible
+            version of the schema.
+        DatabaseBusyError: If another process is using the database.
+        ValueError: If `read_only` is asked of an in-memory database, which
+            would have nothing to read. Refused rather than ignored, because
+            a silently writable "read-only" session is exactly what this
+            function exists to rule out.
+        RuntimeError: If a session is already active in this context, or the
+            process-wide connection already holds the same file.
+    """
+    target = Path(path) if path is not None else config.db_path()
+    if read_only and str(target) == ":memory:":
+        raise ValueError("An in-memory database cannot be opened read-only.")
+    if _session.get() is not None:
+        raise RuntimeError("A database session is already active; sessions do not nest.")
+
+    with _session_lock:
+        with _lock:
+            if _connection is not None and _connection_path == target:
+                raise RuntimeError(
+                    f"The process-wide connection already holds {target}; "
+                    f"close it before opening a session on the same file."
+                )
+
+        conn = _open(target, read_only=read_only)
+        token = _session.set(_Session(conn, target))
+        try:
+            yield conn
+        finally:
+            _session.reset(token)
+            conn.close()
+
+
+def _open(target: Path, *, read_only: bool) -> duckdb.DuckDBPyConnection:
+    """Connect to `target` and make sure its schema is usable.
+
+    A read-write connection applies the schema. A read-only one cannot, so it
+    checks the recorded version instead.
+    """
+    in_memory = str(target) == ":memory:"
+    if read_only and not target.exists():
+        # DuckDB reports this as an IO error, indistinguishable from a lock
+        # conflict, so check first.
+        raise NoDatabaseError(
+            f"No database at {target}. Import a Letterboxd export to create one."
+        )
+    if not in_memory and not read_only:
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        conn = duckdb.connect(
+            str(target),
+            read_only=read_only,
+            config=READ_ONLY_CONFIG if read_only else {},
+        )
+    except duckdb.IOException as error:
+        if in_memory or not target.exists():
+            raise
+        raise DatabaseBusyError(
+            f"The database at {target} is in use by another process -- most "
+            f"likely another `summer` command, or an MCP server in the middle "
+            f"of a call. Try again once it has finished. ({error})"
+        ) from error
+
+    try:
+        if read_only:
+            existing = schema_version(conn)
+            if existing is None:
+                raise EmptyDatabaseError(
+                    "No data in this database yet. Import a Letterboxd export "
+                    "first, then run enrichment."
+                )
+            _require_current_version(existing)
+        else:
+            init_schema(conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
 
 
 def close_connection() -> None:
@@ -161,6 +338,9 @@ def close_connection() -> None:
 
 def database_path() -> Path | None:
     """Where the open connection points, or None if nothing is open yet."""
+    current = _session.get()
+    if current is not None:
+        return current.path
     with _lock:
         return _connection_path
 
