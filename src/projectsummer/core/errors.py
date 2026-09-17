@@ -26,3 +26,7 @@ class NoDatabaseError(LetterboxdError):
 
 class DatabaseBusyError(LetterboxdError):
     """Another process holds the database file's lock."""
+
+
+class DatabaseRecoveryError(LetterboxdError):
+    """The database's write-ahead log cannot be replayed, so it will not open."""

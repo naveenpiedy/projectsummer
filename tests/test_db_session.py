@@ -20,6 +20,7 @@ import pytest
 from projectsummer.core import db
 from projectsummer.core.errors import (
     DatabaseBusyError,
+    DatabaseRecoveryError,
     EmptyDatabaseError,
     NoDatabaseError,
 )
@@ -238,3 +239,90 @@ def test_a_writable_session_can_refuse_external_access(library, tmp_path):
         with pytest.raises(duckdb.Error):
             db.query(f"COPY films TO '{target.as_posix()}'")
     assert not target.exists()
+
+
+# ------------------------------------------------- surviving a killed process
+#
+# DuckDB 1.5 cannot replay a `COMMENT ON COLUMN` from its write-ahead log. A
+# process killed before closing -- Ctrl+C, or a chat client restarting its MCP
+# server -- used to leave a hundred of them there, because every read-write
+# open re-applied schema.sql, and the library then refused to open at all.
+# That happened to a real library; these tests reproduce it with a subprocess.
+
+def _killed_mid_session(path, setup=""):
+    """Run a child that opens a read-write session and dies without closing."""
+    child = (
+        "import os\n"
+        "from projectsummer.core import db\n"
+        f"with db.session(r'{path}', external_access=False) as conn:\n"
+        f"    {setup or 'pass'}\n"
+        "    os._exit(0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def _wal(path):
+    return path.with_name(path.name + ".wal")
+
+
+def test_an_everyday_open_writes_nothing_so_a_kill_leaves_nothing(library):
+    _killed_mid_session(library)
+
+    assert not _wal(library).exists()
+    with db.session(library, read_only=True):
+        assert db.query("SELECT count(*) AS n FROM films")[0]["n"] == 1
+
+
+def test_a_schema_refresh_is_checkpointed_before_a_kill_can_matter(library):
+    raw = duckdb.connect(str(library))
+    raw.execute("UPDATE sync_state SET value = 'older' WHERE key = 'schema_fingerprint'")
+    raw.close()
+
+    _killed_mid_session(library)  # re-applies schema.sql, then dies
+
+    with db.session(library, read_only=True):
+        recorded = db.query("SELECT value FROM sync_state WHERE key = 'schema_fingerprint'")
+    assert recorded[0]["value"] != "older"
+
+
+def test_schema_sql_is_only_reapplied_when_it_changes(library):
+    raw = duckdb.connect(str(library))
+    raw.execute("COMMENT ON TABLE films IS NULL")
+    raw.close()
+
+    with db.session(library):
+        pass  # unchanged schema.sql: nothing re-applied
+    with db.session(library, read_only=True):
+        assert db.query("SELECT comment FROM duckdb_tables() WHERE table_name = 'films'")[0]["comment"] is None
+
+    raw = duckdb.connect(str(library))
+    raw.execute("UPDATE sync_state SET value = 'older' WHERE key = 'schema_fingerprint'")
+    raw.close()
+    with db.session(library):
+        pass  # changed: re-applied
+    with db.session(library, read_only=True):
+        assert db.query("SELECT comment FROM duckdb_tables() WHERE table_name = 'films'")[0]["comment"]
+
+
+def test_an_unreplayable_log_is_explained_with_how_to_recover(library):
+    child = (
+        "import duckdb, os\n"
+        f"c = duckdb.connect(r'{library}')\n"
+        "c.execute(\"COMMENT ON COLUMN films.title IS 'left in the log'\")\n"
+        "os._exit(0)\n"
+    )
+    subprocess.run([sys.executable, "-c", child], check=True)
+    try:
+        duckdb.connect(str(library)).close()
+        pytest.skip("this DuckDB replays column comments; the bug these tests guard against is fixed")
+    except duckdb.Error:
+        pass
+
+    for read_only in (False, True):
+        with pytest.raises(DatabaseRecoveryError) as error:
+            with db.session(library, read_only=read_only):
+                pass
+        message = str(error.value)
+        assert f"{library.name}.wal" in message
+        assert ".unreplayable" in message

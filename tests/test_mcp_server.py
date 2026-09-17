@@ -275,9 +275,12 @@ def test_confine_path_resolves_links_before_judging(tmp_path):
 
 # ------------------------------------------------------- preparing the library
 
-def test_preparing_refreshes_the_schema_of_an_existing_library(library):
+def test_preparing_refreshes_the_schema_of_an_upgraded_library(library):
+    # A library built by an older schema.sql: a description missing, and a
+    # fingerprint that no longer matches the file.
     with db.session(library) as conn:
         conn.execute("COMMENT ON TABLE films IS NULL")
+        conn.execute("UPDATE sync_state SET value = 'older' WHERE key = 'schema_fingerprint'")
 
     assert prepare_database(library) is None
 

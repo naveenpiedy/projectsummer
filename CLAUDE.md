@@ -63,8 +63,13 @@ quotes unconvertible values in error messages, so file access on any connection
 reachable by an agent's SQL can leak files. Plugins never open connections
 themselves; they call `db.get_connection()` / `db.query()`.
 
-**Schema changes.** Everything in `schema.sql` is `CREATE ... IF NOT EXISTS`
-and re-runs on every read-write open. So:
+**Schema changes.** Everything in `schema.sql` is `CREATE ... IF NOT EXISTS`.
+`db.init_schema` re-applies the file only when its SHA-256 fingerprint differs
+from the one recorded in `sync_state`, then runs `CHECKPOINT`. Keep it that
+way: DuckDB 1.5.5 cannot replay a `COMMENT ON COLUMN` from the write-ahead log,
+so a process killed mid-open used to leave a log that stopped the library
+opening at all (it happened; `DatabaseRecoveryError` now explains the
+recovery). Never make routine opens write. So:
 - A **new table** reaches existing databases automatically. Prefer this, and
   give a new table every column it will ever need up front.
 - A **new or changed column on an existing table** does not. It needs a

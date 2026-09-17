@@ -23,6 +23,7 @@ holds the lock only while a tool call is actually running.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ import duckdb
 from projectsummer import config
 from projectsummer.core.errors import (
     DatabaseBusyError,
+    DatabaseRecoveryError,
     EmptyDatabaseError,
     LetterboxdError,
     NoDatabaseError,
@@ -104,10 +106,20 @@ _session_lock = threading.Lock()
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create every table, index and view if it does not already exist.
+    """Create every table, index and view, if schema.sql has changed since last time.
 
-    Idempotent for a database already at :data:`SCHEMA_VERSION`, so it is safe
-    to run on every open.
+    Safe to call on every open. It records a fingerprint of schema.sql and
+    only re-applies the file when that fingerprint differs -- a new database,
+    or an upgrade that brings new tables or descriptions -- so an everyday
+    open writes nothing at all.
+
+    That matters because of a DuckDB 1.5 bug. A `COMMENT ON COLUMN` left in
+    the write-ahead log cannot be replayed: if a process is killed before
+    closing -- Ctrl+C on a command, a chat client restarting its MCP server --
+    the database refuses to open until the log is moved aside. Re-applying
+    schema.sql on every open put a hundred such statements in the log every
+    time. Now they are written only when something changed, and checkpointed
+    into the main file straight away.
 
     Raises:
         SchemaVersionError: If the database was built by a different version
@@ -119,15 +131,35 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     if existing is not None:
         _require_current_version(existing)
 
-    conn.execute(_SCHEMA_SQL.read_text(encoding="utf-8"))
+    text = _SCHEMA_SQL.read_text(encoding="utf-8")
+    fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if existing is not None and _recorded_fingerprint(conn) == fingerprint:
+        return
+
+    conn.execute(text)
     conn.execute(
         """
-        INSERT INTO sync_state (key, value) VALUES ('schema_version', ?)
+        INSERT INTO sync_state (key, value) VALUES
+            ('schema_version', ?), ('schema_fingerprint', ?)
         ON CONFLICT (key) DO UPDATE SET value = excluded.value,
                                         updated_at = now()
         """,
-        [SCHEMA_VERSION],
+        [SCHEMA_VERSION, fingerprint],
     )
+    try:
+        conn.execute("CHECKPOINT")
+    except duckdb.Error:
+        # Folding the log into the file is a safeguard, not a requirement:
+        # the schema is applied either way, and a failed checkpoint must not
+        # stop the library opening.
+        pass
+
+
+def _recorded_fingerprint(conn: duckdb.DuckDBPyConnection) -> str | None:
+    row = conn.execute(
+        "SELECT value FROM sync_state WHERE key = 'schema_fingerprint'"
+    ).fetchone()
+    return row[0] if row else None
 
 
 def _require_current_version(existing: str) -> None:
@@ -322,6 +354,20 @@ def _open(
             f"The database at {target} is in use by another process -- most "
             f"likely another `summer` command, or an MCP server in the middle "
             f"of a call. Try again once it has finished. ({error})"
+        ) from error
+    except duckdb.Error as error:
+        if "replaying WAL" not in str(error):
+            raise
+        wal = target.with_name(target.name + ".wal")
+        raise DatabaseRecoveryError(
+            f"The database at {target} could not be opened: DuckDB failed to "
+            f"replay {wal.name}, its record of changes not yet saved into the "
+            f"main file. This happens when a process is stopped part-way "
+            f"through writing. Everything saved before then is in the main "
+            f"file. To recover, close every program using the library, rename "
+            f"{wal} to {wal.name}.unreplayable, and open it again. Keep the "
+            f"renamed file until you have checked nothing recent is missing. "
+            f"({str(error).splitlines()[0]})"
         ) from error
 
     try:
