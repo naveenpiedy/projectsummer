@@ -23,6 +23,7 @@ from typing import Annotated, Any
 import typer
 from pydantic import BaseModel
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -36,7 +37,7 @@ from rich.table import Table
 
 from contextlib import contextmanager
 
-from projectsummer.core import db, progress as progress_api, registry
+from projectsummer.core import asking, db, progress as progress_api, registry
 from projectsummer.core.errors import LetterboxdError, MissingArgumentError, NoDatabaseError
 from projectsummer.core.registry import Plugin
 
@@ -164,7 +165,9 @@ def _build_command(item: Plugin):
             try:
                 # JSON output must stay machine-readable, so nothing is drawn then.
                 reporter = None if as_json else TerminalProgress()
-                with progress_api.reporting_to(reporter):
+                # Questions go to stderr under --json, keeping stdout parseable.
+                asker = TerminalAsker(err_console if as_json else console) if _can_ask() else None
+                with progress_api.reporting_to(reporter), asking.answering_with(asker):
                     result = item.func(**kwargs)
                 break
             except MissingArgumentError as exc:
@@ -253,6 +256,34 @@ class TerminalProgress:
     def note(self, message: str) -> None:
         if console.is_terminal:
             console.print(f"[dim]{message}...[/dim]")
+
+
+class TerminalAsker:
+    """Answers a plugin's questions with single keypresses.
+
+    Only installed by this module, and only when someone is at the terminal.
+    """
+
+    def __init__(self, output: Console):
+        self._output = output
+
+    def tell(self, message: str) -> None:
+        self._output.print()
+        self._output.print(f"[bold magenta]{escape(message)}[/bold magenta]")
+
+    def choose(self, question: str, options: dict[str, str]) -> str:
+        self._output.print()
+        self._output.print(f"[bold]{escape(question)}[/bold]")
+        for key, label in options.items():
+            self._output.print(f"  [cyan]{escape(key)}[/cyan]  {escape(label)}")
+        while True:
+            key = typer.getchar()
+            if not key:
+                # No more input, as when stdin runs dry: stop rather than spin.
+                raise typer.Abort()
+            if key in options:
+                self._output.print(f"[dim]> {escape(key)}[/dim]")
+                return key
 
 
 # ------------------------------------------------------------- rendering

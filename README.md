@@ -203,6 +203,23 @@ average rating at the time, hours watched, and the genres, original languages
 (as codes: `en`, `ta`), production countries and release decades you watched
 most. `--top` sets how many of each, up to 20.
 
+For fun, rank films head to head. Pick the better of two, again and again,
+from the opening round to the final:
+
+```bash
+summer rank --from-list favourites
+summer rank --sql "SELECT tmdb_id FROM films WHERE list_contains(directors, 'Christopher Nolan')"
+summer rank --from-list favourites --mode bracket --save ranked.csv
+```
+
+Press `1` or `2` to pick, `u` to undo, `q` to stop. Up to 32 films, drawn in
+a random order. The default ranks every film, in at most 129 choices for 32
+and usually fewer; `--mode bracket` is a knockout that finds a champion in one
+choice per film knocked out, and points out upsets against your own ratings.
+`--save` writes the finished order as a list to import into Letterboxd.
+Nothing is stored in the library. It needs a terminal, so it is not offered to
+AI assistants.
+
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
 serves until you press Ctrl+C. Its column explorer shows a histogram and
 summary statistics for each column of a result, but it has no chart builder:
@@ -433,7 +450,8 @@ than waited for.
 - [x] People and credits: gender, birthdays, roles across cast and crew
 - [x] Search-based tool discovery over MCP
 - [x] Trends by year and month
-- [ ] Plugins: taste, list overlap, ranking
+- [x] Head-to-head ranking
+- [ ] Plugins: taste, list overlap
 
 ## Attribution and affiliation
 

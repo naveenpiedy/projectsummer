@@ -115,7 +115,10 @@ especially for non-English crew; NULL means unknown.
 
 **stdout is the MCP protocol channel.** Plugins must not print. Report progress
 with `progress.track(...)` / `progress.note(...)`; the CLI renders it and the
-server ignores it.
+server ignores it. A plugin that must ask questions as it runs (`rank`) uses
+`asking.choose(...)` / `asking.tell(...)` the same way: the CLI answers with
+keypresses at a terminal, and with no asker installed `choose` raises. Such a
+plugin is CLI-only.
 
 **Distributable.** No hardcoded paths or usernames; configuration comes from
 env vars or `.env` via `config.py`. Never store the email from `profile.csv`.
@@ -155,7 +158,7 @@ far goes step by step, with a plan approved first and a pause after each step.
    they are not in `films`. Offered, not yet taken up.
 3. **More analysis plugins** after `trends`: taste (highest- and
    lowest-rated directors, genres, decades, countries, and where you differ
-   from TMDB's average), list overlap, and ranking (meaning not yet agreed).
+   from TMDB's average) and list overlap.
    `trends` reports original languages as ISO codes; a code-to-name mapping
    would read better but needs a data source.
 4. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
