@@ -190,6 +190,19 @@ $ summer query "SELECT year(watched_date) AS year, count(*) AS films
 anything running past 30 seconds. The size limit keeps a wide `SELECT *` from
 flooding an assistant's context; select the columns you need.
 
+To see how your viewing has changed, by year or by month:
+
+```bash
+summer trends                       # one row per year of your diary
+summer trends --by month --year 2025
+summer trends --by month            # asks which year
+```
+
+Each period has viewings, different films, first watches and rewatches, your
+average rating at the time, hours watched, and the genres, original languages
+(as codes: `en`, `ta`), production countries and release decades you watched
+most. `--top` sets how many of each, up to 20.
+
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
 serves until you press Ctrl+C. Its column explorer shows a histogram and
 summary statistics for each column of a result, but it has no chart builder:
@@ -234,13 +247,21 @@ The assistant gets these tools:
 |---|---|
 | `describe_schema` | Tables, then a table's columns, then what a column holds |
 | `query` | One read-only `SELECT` |
-| `overview`, `lists`, `random_watchlist_pick` | The same as the commands |
+| `overview`, `lists`, `random_watchlist_pick`, `trends` | The same as the commands |
 | `sync` | Fetches your recent diary entries from Letterboxd's feed |
 | `set_list_ranked` | Marks a list as ranked |
 | `list_builder` | Writes an importable list into the output folder |
 
-The first five only read. Importing, resolving and enriching stay with the
-CLI: they run for minutes, and are yours to start.
+Importing, resolving and enriching stay with the CLI: they run for minutes,
+and are yours to start.
+
+Not every tool is listed up front. Each listed tool's description is sent
+with every message, and the analyses will outnumber what a question usually
+needs. So the assistant sees `describe_schema`, `query`, `overview` and every
+tool that changes something, plus `search_tools` to find the rest by
+describing what it wants and `call_tool` to run what it finds. Tools that
+change something are never run through `call_tool`, so your client always
+shows them by name before asking you to approve one.
 
 Questions about people — "which women directors do I rate highest?" — work
 through the same two tools: `describe_schema` points the assistant to the
@@ -410,7 +431,9 @@ than waited for.
 - [x] List builder: filters or SQL to a Letterboxd-importable list
 - [x] MCP server, generated from the same registry
 - [x] People and credits: gender, birthdays, roles across cast and crew
-- [ ] Plugins: trends, taste, list overlap, ranking
+- [x] Search-based tool discovery over MCP
+- [x] Trends by year and month
+- [ ] Plugins: taste, list overlap, ranking
 
 ## Attribution and affiliation
 

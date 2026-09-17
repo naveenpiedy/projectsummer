@@ -55,6 +55,20 @@ plugins never. Changing what is exposed must change the pinned lists in
 and `tests/test_mcp_server.py::EXPOSED`. `destructive`, `idempotent` and
 `open_world` only become tool hints.
 
+**Tool discovery.** The MCP tool list holds only `mcp_server.ALWAYS_LISTED`
+(`describe_schema`, `overview`, `query`), every write tool, and FastMCP's
+BM25 `search_tools` / `call_tool` pair; other read tools are found by search
+(`tests/test_mcp_server.py::LISTED` pins this). Write tools stay listed and
+our `call_tool` refuses them, because clients decide whether to ask the user
+from a tool's own annotations. Search ranks on a tool's name, description and
+parameter descriptions, so a new plugin's docstring should use the words a
+question would.
+
+**Arguments needed only sometimes.** Raise `errors.MissingArgumentError` with
+the argument's name and a question (see `trends` needing `year` by month).
+Over MCP the message tells the agent what to pass; the CLI asks at a terminal
+and runs the command again.
+
 **Connections.** The CLI uses one process-wide connection. The MCP server opens
 a `db.session(...)` per tool call and closes it, because DuckDB lets no other
 process open a file held read-write. Sessions don't nest, are per-thread
@@ -139,11 +153,11 @@ far goes step by step, with a plan approved first and a pause after each step.
    counted in `still_pending`. Stored films TMDB drops are already marked done
    via `film_credit_fetches`; these need a small record of their own, since
    they are not in `films`. Offered, not yet taken up.
-3. **Analysis plugins** from the README roadmap: trends, taste, list overlap,
-   ranking. When the MCP tool count passes ~15–20, consider FastMCP's
-   `BM25SearchTransform` with `describe_schema` and `query` kept visible;
-   until then direct listing is cheaper (output schemas, most of the ~24KB
-   tool list, are not passed to the model by Claude clients).
+3. **More analysis plugins** after `trends`: taste (highest- and
+   lowest-rated directors, genres, decades, countries, and where you differ
+   from TMDB's average), list overlap, and ranking (meaning not yet agreed).
+   `trends` reports original languages as ISO codes; a code-to-name mapping
+   would read better but needs a data source.
 4. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
    troubleshooting page (`DatabaseRecoveryError`, `DatabaseBusyError`, TMDB
    token) now; a query cookbook whose SQL runs as tests, and MCP prompts

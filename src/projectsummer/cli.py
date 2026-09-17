@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 import threading
+import typing
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -35,7 +37,7 @@ from rich.table import Table
 from contextlib import contextmanager
 
 from projectsummer.core import db, progress as progress_api, registry
-from projectsummer.core.errors import LetterboxdError, NoDatabaseError
+from projectsummer.core.errors import LetterboxdError, MissingArgumentError, NoDatabaseError
 from projectsummer.core.registry import Plugin
 
 #: Parameter name used internally for the --json flag. Underscore-prefixed so
@@ -157,14 +159,26 @@ def _build_command(item: Plugin):
 
     def command(**kwargs: Any) -> None:
         as_json = kwargs.pop(_JSON_FLAG, False)
-        try:
-            # JSON output must stay machine-readable, so nothing is drawn then.
-            reporter = None if as_json else TerminalProgress()
-            with progress_api.reporting_to(reporter):
-                result = item.func(**kwargs)
-        except LetterboxdError as exc:
-            # Expected outcomes, not crashes: a clear message beats a traceback.
-            raise _fail(exc) from None
+        asked: set[str] = set()
+        while True:
+            try:
+                # JSON output must stay machine-readable, so nothing is drawn then.
+                reporter = None if as_json else TerminalProgress()
+                with progress_api.reporting_to(reporter):
+                    result = item.func(**kwargs)
+                break
+            except MissingArgumentError as exc:
+                # Asked once per argument, so a plugin that keeps refusing an
+                # answer ends in its message rather than a loop.
+                if exc.argument in asked or not _can_ask():
+                    raise _fail(exc) from None
+                asked.add(exc.argument)
+                kwargs[exc.argument] = typer.prompt(
+                    exc.question, type=_prompt_type(signature, exc.argument), err=True
+                )
+            except LetterboxdError as exc:
+                # Expected outcomes, not crashes: a clear message beats a traceback.
+                raise _fail(exc) from None
         _render(result, as_json=as_json)
 
         if item.serves:
@@ -177,6 +191,20 @@ def _build_command(item: Plugin):
         parameters=parameters, return_annotation=inspect.Signature.empty
     )
     return command
+
+
+def _can_ask() -> bool:
+    """Whether someone is at a terminal to answer a question."""
+    return sys.stdin.isatty()
+
+
+def _prompt_type(signature: inspect.Signature, name: str) -> Any:
+    """The type to convert an answer to: the parameter's, without its None."""
+    annotation = signature.parameters[name].annotation
+    concrete = [arg for arg in typing.get_args(annotation) if arg is not type(None)]
+    if len(concrete) == 1:
+        return concrete[0]
+    return annotation if isinstance(annotation, type) else str
 
 
 def _as_cli_parameter(parameter: inspect.Parameter, help_text: str) -> inspect.Parameter:
@@ -315,7 +343,12 @@ def _format(value: Any) -> str:
         return "yes" if value else "no"
     if isinstance(value, (list, tuple)):
         # An empty list is absence, and should read like one.
-        return ", ".join(str(item) for item in value) if value else "[dim]-[/dim]"
+        return ", ".join(_format(item) for item in value) if value else "[dim]-[/dim]"
+    if isinstance(value, dict) and value:
+        # A small record inside a cell, such as a breakdown's name and count:
+        # its first value names it, and the rest qualify it.
+        first, *rest = (_format(item) for item in value.values())
+        return f"{first} ({', '.join(rest)})" if rest else first
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)

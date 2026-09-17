@@ -27,6 +27,15 @@ of it is enforced here rather than suggested to the model:
 
 The tool annotations (`readOnlyHint` and the rest) describe these rules to
 clients. They are a mirror of the enforcement above, never a substitute.
+
+**Tools are discovered, not all listed.** Every listed tool's schema costs
+context on every turn, and the analysis tools will outnumber the ones a
+question usually needs. So the listing holds describe_schema, query and
+overview, every tool that changes something, and a search_tools / call_tool
+pair that finds and runs the rest. Tools that write are always listed, and
+call_tool refuses them: a client decides whether to ask the user before a
+call from that tool's own annotations, which a call through the proxy would
+hide.
 """
 
 from __future__ import annotations
@@ -48,13 +57,22 @@ from projectsummer.core.registry import Plugin
 try:
     from fastmcp import FastMCP
     from fastmcp.exceptions import ToolError
+    from fastmcp.server.context import Context
     from fastmcp.server.providers import Provider
+    from fastmcp.server.transforms.search import BM25SearchTransform
+    from fastmcp.server.transforms.search.base import serialize_tools_for_output_markdown
     from fastmcp.tools import Tool
+    from fastmcp.tools.base import ToolResult
     from mcp.types import ToolAnnotations
 except ImportError:  # pragma: no cover -- exercised by installing without the extra
     FastMCP = None  # type: ignore[assignment,misc]
 
 SERVER_NAME = "projectsummer"
+
+#: Read tools listed directly rather than found by search: the two nearly
+#: every question goes through, and the one that says whether there is a
+#: library to ask about yet.
+ALWAYS_LISTED = ("describe_schema", "overview", "query")
 
 
 def instructions(output_dir: Path) -> str:
@@ -71,6 +89,10 @@ def instructions(output_dir: Path) -> str:
         "average, a top ten) rather than fetching many rows to work it out.\n\n"
         "people and film_credits hold who made each film -- gender, birthday, "
         "birthplace -- where a missing value means unknown.\n\n"
+        "More tools exist than are listed, such as ready-made analyses of "
+        "viewing trends over time. Find them with search_tools, describing "
+        "what you want, and run one with call_tool; prefer one that fits over "
+        "writing the SQL yourself.\n\n"
         "overview says whether the library is imported and enriched yet. Tools "
         "not marked read-only change something: sync fetches recent diary "
         "entries from Letterboxd, set_list_ranked marks a list as ranked, and "
@@ -193,6 +215,61 @@ if FastMCP is not None:
         async def _list_tools(self) -> Sequence[Tool]:
             return self._tools
 
+    class ToolDiscovery(BM25SearchTransform):
+        """Lists the pinned tools, and lets the rest be searched for and called.
+
+        FastMCP's own call_tool proxy would run any tool in the catalog. This
+        one runs only the read tools that search can find, so a call that
+        changes something is always made to that tool by name, where the
+        client can see its annotations.
+        """
+
+        def __init__(self, pinned: Sequence[str]):
+            super().__init__(
+                always_visible=list(pinned),
+                search_result_serializer=serialize_tools_for_output_markdown,
+            )
+
+        def _make_call_tool(self) -> Tool:
+            transform = self
+
+            async def call_tool(
+                name: Annotated[str, "The name of a tool found with search_tools"],
+                arguments: Annotated[
+                    dict[str, Any] | None, "Arguments to pass to that tool"
+                ] = None,
+                ctx: Context = None,  # type: ignore[assignment]
+            ) -> ToolResult:
+                """Run a tool found with search_tools, by name.
+
+                Tools already in your tool list are called directly instead.
+                """
+                searchable = {
+                    tool.name for tool in await transform._get_visible_tools(ctx)
+                    if tool.annotations is not None and tool.annotations.read_only_hint
+                }
+                if name not in searchable:
+                    catalog = {tool.name for tool in await transform.get_tool_catalog(ctx)}
+                    if name in catalog:
+                        raise ToolError(
+                            f"{name} is in your tool list; call it directly rather "
+                            f"than through call_tool."
+                        )
+                    raise ToolError(
+                        f"Unknown tool: {name!r}. Use search_tools to find one."
+                    )
+                return await ctx.fastmcp.call_tool(name, arguments or {})
+
+            return Tool.from_function(fn=call_tool, name=self._call_tool_name)
+
+
+def pinned_tools(plugins: Sequence[Plugin]) -> list[str]:
+    """The tools listed directly: the core read tools and every write tool."""
+    return [
+        item.name for item in plugins
+        if item.name in ALWAYS_LISTED or item.access == "write"
+    ]
+
 
 # ----------------------------------------------------------------- server
 
@@ -222,13 +299,13 @@ def build_server(
     read_only = config.mcp_read_only() if read_only is None else read_only
     plugins = registry.discover() if plugins is None else plugins
 
+    exposed = exposed_plugins(plugins, read_only=read_only)
     return FastMCP(
         SERVER_NAME,
         instructions=instructions(output_dir),
         version=_package_version(),
-        providers=[
-            RegistryProvider(exposed_plugins(plugins, read_only=read_only), database, output_dir)
-        ],
+        providers=[RegistryProvider(exposed, database, output_dir)],
+        transforms=[ToolDiscovery(pinned_tools(exposed))],
         mask_error_details=True,
     )
 

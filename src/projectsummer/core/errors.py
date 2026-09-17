@@ -30,3 +30,19 @@ class DatabaseBusyError(LetterboxdError):
 
 class DatabaseRecoveryError(LetterboxdError):
     """The database's write-ahead log cannot be replayed, so it will not open."""
+
+
+class MissingArgumentError(LetterboxdError):
+    """An optional argument turns out to be needed, given the others.
+
+    `trends(by="month")` needs a year, but `year` cannot simply be required:
+    by year it means something else. The message is written for an agent,
+    which passes the argument and calls again. The CLI asks the person at the
+    terminal instead, using `question`, and runs the command again with the
+    answer.
+    """
+
+    def __init__(self, message: str, *, argument: str, question: str):
+        super().__init__(message)
+        self.argument = argument
+        self.question = question

@@ -83,6 +83,7 @@ async def _call(server, name, arguments=None):
 
 # ------------------------------------------------------------ what is offered
 
+#: Every plugin a client can call, found by search or listed.
 EXPOSED = [
     "describe_schema",
     "list_builder",
@@ -92,15 +93,89 @@ EXPOSED = [
     "random_watchlist_pick",
     "set_list_ranked",
     "sync",
+    "trends",
+]
+
+#: What the tool list shows: the core read tools, every write tool, and the
+#: pair that finds and runs the rest.
+LISTED = [
+    "describe_schema",
+    "list_builder",
+    "overview",
+    "query",
+    "set_list_ranked",
+    "sync",
+    "search_tools",
+    "call_tool",
 ]
 
 
-def test_exactly_the_mcp_plugins_are_tools_in_name_order(library, output_dir):
+def test_the_listing_holds_the_core_and_write_tools_and_search(library, output_dir):
     async def listed():
         async with Client(serve(library, output_dir)) as client:
             return [tool.name for tool in await client.list_tools()]
 
-    assert run(listed()) == EXPOSED
+    assert run(listed()) == LISTED
+
+
+def test_every_mcp_plugin_can_be_reached(library, output_dir):
+    server = serve(library, output_dir)
+    for name in EXPOSED:
+        assert run(server.get_tool(name)) is not None, name
+
+
+# ------------------------------------------------------------- discovery
+
+def _text(result):
+    return result.content[0].text
+
+
+def test_search_finds_a_tool_that_is_not_listed(library, output_dir):
+    result = run(_call(serve(library, output_dir), "search_tools", {"query": "pick a film from my watchlist"}))
+    assert not result.is_error
+    assert "### random_watchlist_pick" in _text(result)
+
+
+def test_search_finds_the_analyses(library, output_dir):
+    result = run(_call(serve(library, output_dir), "search_tools", {"query": "how my viewing changed over the years"}))
+    assert _text(result).startswith("### trends")
+
+
+def test_search_offers_only_what_is_not_listed(library, output_dir):
+    result = run(_call(serve(library, output_dir), "search_tools", {"query": "query sql sync lists"}))
+    text = _text(result)
+    assert "### lists" in text
+    assert "### query" not in text and "### sync" not in text
+
+
+def test_call_tool_runs_a_found_read_tool(library, output_dir):
+    result = run(_call(
+        serve(library, output_dir), "call_tool",
+        {"name": "random_watchlist_pick", "arguments": {"genre": "Horror"}},
+    ))
+    assert not result.is_error, _text(result)
+    assert result.structured_content["title"]
+
+
+def test_a_hidden_tool_can_still_be_called_by_name(library, output_dir):
+    result = run(_call(serve(library, output_dir), "lists"))
+    assert not result.is_error, _text(result)
+
+
+def test_call_tool_refuses_a_listed_tool_so_its_annotations_are_seen(library, output_dir):
+    result = run(_call(
+        serve(library, output_dir), "call_tool", {"name": "set_list_ranked", "arguments": {"slug": "x"}},
+    ))
+    assert result.is_error
+    assert "call it directly" in _text(result)
+
+
+def test_call_tool_cannot_reach_a_plugin_not_marked_for_mcp(library, output_dir):
+    result = run(_call(
+        serve(library, output_dir), "call_tool", {"name": "ingest", "arguments": {"export_path": "x"}},
+    ))
+    assert result.is_error
+    assert "Unknown tool" in _text(result)
 
 
 def test_a_plugin_not_marked_for_mcp_cannot_be_called(library, output_dir):
@@ -111,7 +186,7 @@ def test_a_plugin_not_marked_for_mcp_cannot_be_called(library, output_dir):
 
 def test_read_only_mode_leaves_out_every_write_tool(library, output_dir):
     tools = run(_tools(serve(library, output_dir, read_only=True)))
-    assert sorted(tools) == ["describe_schema", "lists", "overview", "query", "random_watchlist_pick"]
+    assert sorted(tools) == ["call_tool", "describe_schema", "overview", "query", "search_tools"]
 
     result = run(_call(serve(library, output_dir, read_only=True), "set_list_ranked", {"slug": "favourites"}))
     assert result.is_error and "Unknown tool" in result.content[0].text
@@ -313,7 +388,7 @@ def test_the_real_server_speaks_clean_stdio(library, tmp_path):
             return names, result.structured_content
 
     names, overview = run(session())
-    assert names == EXPOSED
+    assert names == LISTED
     assert overview["films_enriched"] == len(SAMPLE_FILMS)
 
 
