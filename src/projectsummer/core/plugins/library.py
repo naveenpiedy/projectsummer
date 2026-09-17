@@ -72,9 +72,9 @@ def enrich(limit: int | None = None) -> EnrichResult:
     it fetches each credited person's details: birthday, birthplace, other
     names.
 
-    Films take about a minute per thousand. People take longer -- a
-    library of a thousand films credits several thousand people, one
-    request each -- but only once. Safe to interrupt: a second run fetches
+    Films take a couple of minutes per thousand. People take longer -- a
+    library of 1,400 films credits about 14,000 people, one request each,
+    roughly twenty minutes -- but only once. Safe to interrupt: a second run fetches
     only what is still missing, and people come last, so everything else is
     already done.
 

@@ -192,7 +192,8 @@ def describe(
             column=None,
             next_step=(
                 "Call describe_schema with table=<name> to see a table's columns. "
-                "films, diary_entries and film_watch_stats answer most questions."
+                "films, diary_entries and film_watch_stats answer most questions; "
+                "people and film_credits answer questions about who made them."
             ),
         )
 

@@ -62,6 +62,13 @@ class Overview(Result):
     """The earliest watched date in the imported diary."""
     last_watch: date | None
     """The most recent watched date in the imported diary."""
+    people: int
+    """People credited on your films: leading cast and chosen crew."""
+    films_without_credits: int
+    """Films whose cast and crew are not stored yet. Run enrich to fetch them."""
+    people_without_details: int
+    """Credited people whose birthday, birthplace and other details are not
+    fetched yet. Run enrich to fetch them."""
 
 
 # "write" because loading the ui extension downloads and installs it, which a
@@ -137,7 +144,15 @@ def overview() -> Overview:
             count(*) FILTER (liked)               AS liked,
             count(*) FILTER (my_rating IS NOT NULL) AS rated,
             (SELECT min(watched_date) FROM staging_diary) AS first_watch,
-            (SELECT max(watched_date) FROM staging_diary) AS last_watch
+            (SELECT max(watched_date) FROM staging_diary) AS last_watch,
+            (SELECT count(*) FROM people)         AS people,
+            (SELECT count(*) FROM films f
+             WHERE NOT EXISTS (SELECT 1 FROM film_credit_fetches c
+                               WHERE c.tmdb_id = f.tmdb_id)) AS films_without_credits,
+            (SELECT count(*) FROM people p
+             WHERE p.details_fetched_at IS NULL
+               AND EXISTS (SELECT 1 FROM film_credits c
+                           WHERE c.person_id = p.person_id)) AS people_without_details
         FROM staging_films
         """
     )[0]

@@ -56,11 +56,22 @@ and needs a free API token (see [Configuration](#configuration)):
 
 ```console
 $ summer enrich
-Attempted       1390
-Enriched        1390
-Diary entries   1114
-Unmatched          0
+Attempted              1390
+Enriched               1390
+Diary entries          1114
+Unmatched                 0
+People fetched        14161
+People not on tmdb        0
+People pending            0
 ```
+
+`enrich` works in two parts. First the films — genres, runtime, ratings, and
+who made them. Then the people credited on them: birthday, birthplace and
+other names, one request per person. A library of about 1,400 films credits
+about 14,000 people, so the second part is by far the longer: roughly twenty
+minutes, with requests made eight at a time. It happens once — later runs
+fetch only people they have not seen — and it comes last and saves as it
+goes, so interrupting it is safe and running `enrich` again carries on.
 
 That is the setup done. Now you can ask it things:
 
@@ -90,6 +101,15 @@ This reads your public RSS feed, which publishes TMDB ids directly — so
 unlike the first import it looks nothing up on Letterboxd's website. It covers
 roughly your last fifty diary entries and reviews. Watchlist additions and
 likes are not published in any feed, so those still come from a fresh export.
+A film you have never logged before arrives with its cast and crew, and the
+details of anyone new on it.
+
+### Upgrading from a version without people
+
+Libraries enriched before cast and crew were kept have films but no people.
+Run `summer enrich` once: it fetches each film again for its credits, then
+the people on them. `summer overview` shows how many films and people are
+still waiting.
 
 ## Building lists
 
@@ -297,6 +317,28 @@ because a film can be watched more than once and each viewing carries its own
 date, rating and tags. That is what makes viewing streaks, rating drift and
 year-in-review answerable at all. Rolled-up counts come from the
 `film_watch_stats` view, so they can never disagree with the rows beneath them.
+
+People have tables of their own. `people` holds one row per person, keyed
+by TMDB's person id — gender, birthday, birthplace, other names — and
+`film_credits` holds one row per part a person played in a film, under a
+plain role such as `director`, `writer`, `composer` or `actor`. A name alone
+cannot do this: a person's birthday belongs to them rather than to each
+film, and two people can share a name.
+
+```sql
+SELECT p.name, count(*) AS films, round(avg(f.my_rating), 2) AS avg_rating
+FROM film_credits c
+JOIN people p USING (person_id)
+JOIN films f USING (tmdb_id)
+WHERE c.role = 'director' AND p.gender = 'female' AND f.watched
+GROUP BY p.person_id, p.name ORDER BY films DESC;
+```
+
+Only the ten leading cast and a chosen set of crew roles are kept. Gender,
+birthday and birthplace have gaps, thicker for crew and for films outside
+English, and a missing value means unknown — so a filter on them quietly
+leaves those people out. The name lists on `films` (`directors`, `writers`,
+...) stay as the quick path, built from the same credits.
 
 Also stored: `lists` and `list_entries` (with positions, so ranked lists
 survive a round trip), a one-row `profile`, and `film_identity` — the resolution

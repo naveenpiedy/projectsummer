@@ -328,6 +328,7 @@ def sync_feed(
     from projectsummer.core.enrich import (
         MissingTokenError,
         TMDBClient,
+        fetch_all,
         fetch_people,
         store_films,
     )
@@ -350,8 +351,7 @@ def sync_feed(
             client = TMDBClient(token)
 
         rows = []
-        for tmdb_id in progress.track(unknown, "Fetching new films from TMDB"):
-            row = client.fetch_movie(tmdb_id)
+        for _, row in fetch_all(unknown, client.fetch_movie, "Fetching new films from TMDB"):
             if row is not None:
                 rows.append(row)
         store_films(rows)

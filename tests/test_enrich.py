@@ -530,6 +530,9 @@ def test_a_person_tmdb_no_longer_has_is_not_asked_for_forever(resolved):
 def test_an_interrupted_run_keeps_what_it_fetched(resolved, monkeypatch):
     from projectsummer.core import enrich
 
+    # One worker, so exactly which batches were saved is predictable. The
+    # concurrent version of this is tested below, by what must hold anyway.
+    monkeypatch.setattr(enrich, "WORKERS", 1)
     monkeypatch.setattr(enrich, "PEOPLE_BATCH", 5)
     with pytest.raises(KeyboardInterrupt):
         enrich_all(client=FakeClient(fail_person_after=12))
@@ -626,7 +629,8 @@ def test_a_missing_person_is_none_without_retrying(sleeps):
 def test_being_rate_limited_waits_as_told_then_retries(sleeps):
     client = _client(_Response(429, headers={"Retry-After": "3"}), _Response(200, person_response(7)))
     assert client.fetch_person(7)["person_id"] == 7
-    assert 3 in sleeps
+    # Measured against a clock, so a hair under the three seconds asked for.
+    assert any(2.9 < slept <= 3 for slept in sleeps)
 
 
 def test_a_network_blip_is_retried(sleeps):
@@ -649,3 +653,196 @@ def test_films_go_through_the_same_client_rules(sleeps):
     row = client.fetch_movie(27205)
     assert row["directors"] == ["Christopher Nolan"]
     assert "append_to_response" not in client.session.urls[0]  # sent as params
+
+
+# ---------------------------------------------------------------- catching up
+#
+# A library enriched before credits were kept has films and no people. The
+# next enrich must notice, fetch each film again for its credits, and then
+# fetch the people on them -- with no flag for the user to know about.
+
+def _forget_credits():
+    conn = db.get_connection()
+    for table in ("film_credits", "film_credit_fetches", "people"):
+        conn.execute(f"DELETE FROM {table}")
+
+
+def test_films_stored_before_credits_existed_are_fetched_again(resolved):
+    enrich_all(client=FakeClient())
+    _forget_credits()
+
+    client = FakeClient()
+    report = enrich_all(client=client)
+
+    assert sorted(client.requested) == [238, 348, 393, 694]
+    assert report.attempted == 4
+    assert db.query("SELECT count(*) AS n FROM film_credits")[0]["n"] == 4 * CREDITS_PER_FILM
+    assert report.people_fetched == PEOPLE
+    # User state survives being fetched again.
+    assert db.query("SELECT watched FROM films WHERE tmdb_id = 694")[0]["watched"] is True
+
+    settled = FakeClient()
+    enrich_all(client=settled)
+    assert settled.requested == [] and settled.people_requested == []
+
+
+def test_a_film_that_only_came_from_the_feed_catches_up_too(resolved):
+    enrich_all(client=FakeClient())
+    # Stored by an older sync: in films, never resolved, no credits recorded.
+    store_films([as_film_row(5555, tmdb_response(5555, "From the feed"))])
+    db.get_connection().execute("DELETE FROM film_credit_fetches WHERE tmdb_id = 5555")
+
+    client = FakeClient()
+    enrich_all(client=client)
+    assert client.requested == [5555]
+
+
+def test_a_stored_film_tmdb_no_longer_has_is_not_asked_for_forever(resolved):
+    enrich_all(client=FakeClient())
+    db.get_connection().execute("DELETE FROM film_credit_fetches WHERE tmdb_id = 348")
+
+    report = enrich_all(client=FakeClient(missing={348}))
+    assert report.not_on_tmdb == 1
+    # The film itself stays in the library.
+    assert db.query("SELECT count(*) AS n FROM films WHERE tmdb_id = 348")[0]["n"] == 1
+
+    again = FakeClient()
+    enrich_all(client=again)
+    assert 348 not in again.requested
+
+
+def test_overview_shows_what_is_still_waiting(resolved):
+    from projectsummer.core.plugins.explore import overview
+
+    enrich_all(client=FakeClient())
+    done = overview()
+    assert (done.people, done.films_without_credits, done.people_without_details) == (PEOPLE, 0, 0)
+
+    _forget_credits()
+    assert overview().films_without_credits == 4
+
+    with pytest.raises(KeyboardInterrupt):
+        enrich_all(client=FakeClient(fail_person_after=0))
+    waiting = overview()
+    assert waiting.films_without_credits == 0
+    assert waiting.people_without_details == PEOPLE
+
+
+def test_being_rate_limited_throughout_raises_rather_than_calling_it_gone(sleeps):
+    """None means "TMDB no longer has this", which is recorded for good. A
+    busy TMDB must stop the run instead, so the next run can carry on."""
+    from projectsummer.core.enrich import RateLimitedError
+
+    client = _client(*[_Response(429, headers={"Retry-After": "1"})] * 3)
+    with pytest.raises(RateLimitedError, match="everything fetched so far is kept"):
+        client.fetch_person(7)
+
+
+def test_one_worker_being_told_to_slow_down_holds_them_all(sleeps):
+    import threading
+
+    client = _client(_Response(200, person_response(7)))
+    client.pause(5)
+
+    worker = threading.Thread(target=client.fetch_person, args=(7,))
+    worker.start()
+    worker.join()
+    assert any(4.9 < slept <= 5 for slept in sleeps)
+
+
+def test_each_worker_thread_gets_its_own_http_session():
+    import threading
+
+    from projectsummer.core.enrich import TMDBClient
+
+    client = TMDBClient("token")
+    seen = []
+    threads = [threading.Thread(target=lambda: seen.append(client.session)) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len({id(session) for session in seen}) == 3
+    assert all(session.headers["Authorization"] == "Bearer token" for session in seen)
+
+
+# ------------------------------------------------------ several at a time
+
+class _SlowClient(FakeClient):
+    """Takes a moment per request and records how many ran at once."""
+
+    def __init__(self, **options):
+        super().__init__(**options)
+        import threading
+
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.most_at_once = 0
+
+    def _enter(self):
+        import time
+
+        with self._lock:
+            self.in_flight += 1
+            self.most_at_once = max(self.most_at_once, self.in_flight)
+        time.sleep(0.02)
+        with self._lock:
+            self.in_flight -= 1
+
+    def fetch_movie(self, tmdb_id, max_retries=3):
+        self._enter()
+        return super().fetch_movie(tmdb_id, max_retries)
+
+    def fetch_person(self, person_id, max_retries=3):
+        self._enter()
+        return super().fetch_person(person_id, max_retries)
+
+
+def test_requests_run_several_at_once_but_no_more_than_the_limit(resolved, monkeypatch):
+    from projectsummer.core import enrich
+
+    monkeypatch.setattr(enrich, "WORKERS", 4)
+    client = _SlowClient()
+    report = enrich_all(client=client)
+
+    assert 1 < client.most_at_once <= 4
+    # Nothing fetched twice, nothing missed, everything stored.
+    assert sorted(client.requested) == [238, 348, 393, 694]
+    assert sorted(client.people_requested) == sorted(set(client.people_requested))
+    assert report.people_fetched == PEOPLE and report.people_pending == 0
+    assert db.query("SELECT count(*) AS n FROM film_credits")[0]["n"] == 4 * CREDITS_PER_FILM
+
+
+def test_an_interruption_mid_flight_still_resumes_exactly(resolved, monkeypatch):
+    """With workers running, which batches were saved depends on timing. What
+    must hold regardless: saved people are complete, and the next run fetches
+    exactly the rest."""
+    from projectsummer.core import enrich
+
+    monkeypatch.setattr(enrich, "WORKERS", 4)
+    monkeypatch.setattr(enrich, "PEOPLE_BATCH", 5)
+    with pytest.raises(KeyboardInterrupt):
+        enrich_all(client=_SlowClient(fail_person_after=9))
+
+    saved = db.query("SELECT count(*) AS n FROM people WHERE details_fetched_at IS NOT NULL")[0]["n"]
+    assert saved % 5 == 0 and saved < PEOPLE
+    assert db.query(
+        "SELECT count(*) AS n FROM people WHERE details_fetched_at IS NOT NULL AND imdb_id IS NULL"
+    )[0]["n"] == 0
+
+    resumed = FakeClient()
+    enrich_all(client=resumed)
+    assert len(resumed.people_requested) == PEOPLE - saved
+
+
+def test_a_failing_request_cancels_the_ones_not_yet_started(resolved, monkeypatch):
+    from projectsummer.core import enrich
+
+    monkeypatch.setattr(enrich, "WORKERS", 2)
+    client = _SlowClient(fail_person_after=0)
+    with pytest.raises(KeyboardInterrupt):
+        enrich_all(client=client)
+    # 18 people were queued; the rest were cancelled rather than sent.
+    assert len(client.people_requested) < PEOPLE
+
