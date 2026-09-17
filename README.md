@@ -133,6 +133,32 @@ summer lists      # your lists, and how big they are
 summer ui         # DuckDB's own web UI: SQL notebook, table browser, column profiles
 ```
 
+To write your own SQL, find your way around first. `describe-schema` works
+one level at a time: the tables, then one table's columns, then what one
+column actually holds:
+
+```console
+$ summer describe-schema
+$ summer describe-schema --table films
+$ summer describe-schema --table films --column genres
+$ summer describe-schema --table films --column directors --search "ravi kumar"
+```
+
+That last level matters more than it looks. TMDB's genre is `Science Fiction`,
+not `Sci-Fi`, and a filter on the wrong spelling returns nothing rather than
+an error. `--search` finds a value by part of it, ignoring case, spacing and
+small misspellings.
+
+Then query:
+
+```console
+$ summer query "SELECT year(watched_date) AS year, count(*) AS films
+    FROM diary_entries GROUP BY 1 ORDER BY 1"
+```
+
+`query` runs a single `SELECT` only, returns at most 100 rows by default
+(`--max-rows` up to 1000), and stops anything running past 30 seconds.
+
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
 serves until you press Ctrl+C. Its column explorer shows a histogram and
 summary statistics for each column of a result, but it has no chart builder:

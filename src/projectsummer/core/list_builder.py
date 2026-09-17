@@ -38,6 +38,7 @@ import duckdb
 
 from projectsummer.core import db
 from projectsummer.core.errors import LetterboxdError, NoResultError
+from projectsummer.core.querying import InvalidQueryError, require_single_select
 from projectsummer.core.results import Result
 
 #: Letterboxd's documented limit is 1MB; stay safely under it.
@@ -68,10 +69,6 @@ NAME_COLUMNS = {
 
 class InvalidFilterError(LetterboxdError):
     """A filter value is malformed or not one of the allowed choices."""
-
-
-class InvalidQueryError(LetterboxdError):
-    """A SQL query is not a single SELECT, or lacks a tmdb_id column."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,24 +278,10 @@ def describe(filters: ListFilters) -> list[str]:
 def build_from_sql(sql: str) -> BuiltList:
     """Use a query's `tmdb_id` column, in the order it returns rows.
 
-    The query is checked by DuckDB's own parser: exactly one statement, and
-    that statement a SELECT. Inspecting the text for keywords would miss
-    `SELECT 1; DROP TABLE films` or a `DELETE ... RETURNING`; the parser does
-    not.
+    The query must be a single SELECT; see
+    :func:`~projectsummer.core.querying.require_single_select`.
     """
-    try:
-        statements = duckdb.extract_statements(sql)
-    except duckdb.Error as error:
-        raise InvalidQueryError(f"That query does not parse: {error}") from None
-
-    if len(statements) != 1:
-        raise InvalidQueryError(
-            f"Give exactly one query; found {len(statements)} statements."
-        )
-    if statements[0].type != duckdb.StatementType.SELECT:
-        raise InvalidQueryError(
-            f"Only a SELECT can build a list; this is a {statements[0].type.name}."
-        )
+    require_single_select(sql)
 
     db.require_films()
     try:

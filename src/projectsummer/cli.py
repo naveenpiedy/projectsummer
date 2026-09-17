@@ -254,15 +254,24 @@ def _render(result: Any, *, as_json: bool) -> None:
         console.print(result)
 
 
-def _render_mapping(result: dict[str, Any]) -> None:
-    """Render a result: its plain fields as a record, each list of rows as a table."""
+def _render_mapping(result: dict[str, Any], title: str | None = None) -> None:
+    """Render a result: plain fields as a record, lists of rows as tables, and
+    nested sections in turn, each under its own title."""
     tables = {key: value for key, value in result.items() if _is_row_list(value)}
-    fields = {key: value for key, value in result.items() if key not in tables}
+    sections = {key: value for key, value in result.items() if isinstance(value, dict)}
+    fields = {
+        key: value for key, value in result.items() if key not in tables and key not in sections
+    }
 
+    if title:
+        console.print(f"\n[bold]{title}[/bold]")
     if fields:
         _render_record(fields)
+    titled = bool(fields or sections) or len(tables) > 1
     for key, rows in tables.items():
-        _render_rows(rows, title=_humanise(key) if fields or len(tables) > 1 else None)
+        _render_rows(rows, title=_humanise(key) if titled else None)
+    for key, section in sections.items():
+        _render_mapping(section, title=_humanise(key))
 
 
 def _is_row_list(result: Any) -> bool:

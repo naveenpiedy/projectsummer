@@ -390,6 +390,15 @@ def require_films() -> None:
     )
 
 
+def connection_lock() -> threading.RLock:
+    """The lock guarding the process-wide connection.
+
+    For code that needs a cursor for longer than :func:`query` holds one --
+    reading a result a few rows at a time, say.
+    """
+    return _lock
+
+
 def query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
     """Run a query on the shared connection and return rows as dictionaries.
 

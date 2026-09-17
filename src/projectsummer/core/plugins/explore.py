@@ -7,8 +7,10 @@ from datetime import date
 import duckdb
 
 from projectsummer.core import db
+from projectsummer.core.catalog import SchemaDescription, describe
 from projectsummer.core.db import LibraryState
 from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.querying import DEFAULT_MAX_ROWS, QueryResult, run_select
 from projectsummer.core.registry import plugin
 from projectsummer.core.results import Result
 
@@ -140,3 +142,71 @@ def overview() -> Overview:
         """
     )[0]
     return Overview(state=db.library_state(), **counts)
+
+
+@plugin(category="explore")
+def describe_schema(
+    table: str | None = None,
+    column: str | None = None,
+    search: str | None = None,
+    include_internal: bool = False,
+) -> SchemaDescription:
+    """Describe your library's tables, one level of detail at a time.
+
+    Call this before writing SQL for the query tool. With no arguments it
+    lists the tables and what each holds. Name a table to see its columns,
+    types and meanings. Name a column too to see the values it actually
+    holds, most common first -- worth doing before filtering on text, since
+    a filter only matches the exact spelling stored (TMDB's genre is
+    "Science Fiction", not "Sci-Fi"). Add search to find a particular value,
+    such as a person's name, including near misspellings.
+
+    Args:
+        table: A table or view to describe, e.g. "films".
+        column: A column of that table whose values to show, e.g. "genres".
+        search: Text to look for among that column's values. Case-insensitive,
+            and tolerant of small misspellings.
+        include_internal: Also list the pipeline's internal tables, which
+            hold pre-enrichment data and are rarely what a question needs.
+
+    Returns:
+        The tables, one table's columns, or one column's values, with a hint
+        for the next step.
+
+    Raises:
+        NoResultError: If the table or column does not exist.
+        InvalidArgumentError: If a column is named without a table, or a
+            search without a column.
+    """
+    return describe(table, column, search, include_internal)
+
+
+@plugin(category="explore")
+def query(sql: str, max_rows: int = DEFAULT_MAX_ROWS) -> QueryResult:
+    """Run a read-only SQL query against your library.
+
+    DuckDB SQL: one SELECT statement (WITH and FROM-first are fine). Use
+    describe_schema first to find tables, columns and exact values. The main
+    tables are films (one row per film, with your rating and watched state),
+    diary_entries (one row per viewing) and film_watch_stats (watch counts).
+    List columns such as genres, directors and cast_members hold lists: filter
+    them with list_contains(genres, 'Horror') and count across them with
+    unnest(genres).
+
+    Prefer asking the database for the answer -- counts, averages, top tens --
+    over fetching rows to work it out: results are capped at max_rows, and a
+    query is stopped after 30 seconds.
+
+    Args:
+        sql: A single SELECT statement.
+        max_rows: Most rows to return, from 1 to 1000.
+
+    Returns:
+        The result's columns and rows, and whether rows were cut off.
+
+    Raises:
+        InvalidQueryError: If the text is not a single SELECT, or DuckDB
+            rejects it. The message says why, so the query can be corrected.
+        QueryTimeoutError: If the query runs for more than 30 seconds.
+    """
+    return run_select(sql, max_rows=max_rows)

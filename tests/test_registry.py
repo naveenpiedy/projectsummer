@@ -394,8 +394,10 @@ def test_exactly_these_builtins_are_offered_over_mcp():
     found = registry.discover()
     offered = {name: item.access for name, item in found.items() if item.mcp}
     assert offered == {
+        "describe_schema": "read",
         "lists": "read",
         "overview": "read",
+        "query": "read",
         "random_watchlist_pick": "read",
         "set_list_ranked": "write",
         "sync": "write",
