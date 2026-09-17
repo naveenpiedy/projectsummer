@@ -8,10 +8,12 @@ runs, and each has one home here:
   a `DELETE ... RETURNING`; the parser does not. Over MCP this is the second
   line of defence -- the session is read-only, so DuckDB refuses writes
   regardless -- but at the CLI it is the only one.
-* **Results are bounded**, in rows and in time. A result that floods an
-  agent's context is as unhelpful as one that never arrives, and an
+* **Results are bounded**, in rows, in size and in time. A result that
+  floods an agent's context is as unhelpful as one that never arrives, and an
   accidental cross join would otherwise hang the MCP server and the chat
-  client with it.
+  client with it. Rows alone are not enough: a hundred rows of
+  `SELECT * FROM films` is some 50k tokens, a well-formed aggregate a few
+  hundred.
 * **Every value is JSON-shaped.** DuckDB hands back Decimals, UUIDs,
   intervals and bytes, none of which a tool's output schema can promise.
 """
@@ -39,6 +41,11 @@ Cell = Scalar | list[Scalar] | dict[str, Scalar]
 
 DEFAULT_MAX_ROWS = 100
 MAX_ROWS_CEILING = 1000
+
+#: Most characters of JSON a result's rows may take up, about 5k tokens. Not
+#: an argument: an agent that could raise it would, and the point is to steer
+#: it towards selecting fewer columns instead.
+MAX_RESULT_CHARS = 20_000
 
 #: How long a query may run before it is interrupted.
 QUERY_TIMEOUT_SECONDS = 30.0
@@ -99,9 +106,10 @@ class QueryResult(Result):
     row_count: int
     """How many rows are included here."""
     truncated: bool
-    """True if the query returned more rows than max_rows allowed."""
+    """True if rows were left out, because the query returned more than
+    max_rows or the rows ran past the size limit."""
     note: str | None
-    """What to do about a truncated result."""
+    """Why a result was truncated, and what to do about it."""
 
 
 def run_select(
@@ -110,6 +118,10 @@ def run_select(
     timeout: float | None = None,
 ) -> QueryResult:
     """Run a single SELECT, returning at most `max_rows` rows.
+
+    Rows also stop once they would take the result past
+    :data:`MAX_RESULT_CHARS` of JSON, though the first row is always kept so a
+    result is never empty for being wide.
 
     One row past the limit is read to learn whether there were more, rather
     than wrapping the query in a LIMIT: wrapping a query in a subquery is not
@@ -155,11 +167,17 @@ def run_select(
             timer.cancel()
 
     names = _unique_names([column[0] for column in description])
-    rows = [
-        {name: to_cell(value) for name, value in zip(names, row)}
-        for row in raw[:max_rows]
-    ]
-    truncated = len(raw) > max_rows
+    rows: list[dict[str, Cell]] = []
+    size = 0
+    too_large = False
+    for row in raw[:max_rows]:
+        cells = {name: to_cell(value) for name, value in zip(names, row)}
+        size += len(json.dumps(cells, default=str, ensure_ascii=False))
+        if rows and size > MAX_RESULT_CHARS:
+            too_large = True
+            break
+        rows.append(cells)
+    truncated = too_large or len(raw) > max_rows
     return QueryResult(
         columns=[
             QueryColumn(name=name, type=str(column[1]))
@@ -168,14 +186,27 @@ def run_select(
         rows=rows,
         row_count=len(rows),
         truncated=truncated,
-        note=(
+        note=_truncation_note(len(rows), max_rows, too_large, truncated),
+    )
+
+
+def _truncation_note(
+    shown: int, max_rows: int, too_large: bool, truncated: bool
+) -> str | None:
+    if too_large:
+        return (
+            f"Only the first {shown} rows are shown: the rest would pass the "
+            f"{MAX_RESULT_CHARS:,}-character limit on a result. Select only "
+            f"the columns you need rather than *, leave out long text such as "
+            f"overview and review, or aggregate to get the answer directly."
+        )
+    if truncated:
+        return (
             f"Only the first {max_rows} rows are shown. Aggregate or filter to "
             f"get the answer directly, rather than reading rows; max_rows goes "
             f"up to {MAX_ROWS_CEILING}."
-            if truncated
-            else None
-        ),
-    )
+        )
+    return None
 
 
 def _unique_names(names: list[str]) -> list[str]:

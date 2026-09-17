@@ -97,6 +97,34 @@ def test_a_result_exactly_at_the_limit_is_not_truncated(conn):
     assert result.row_count == len(SAMPLE_FILMS)
 
 
+def test_rows_stop_before_the_result_grows_too_large(conn):
+    # About 1,000 characters a row, so 100 rows would be five times the limit.
+    result = run_select(
+        "SELECT i, repeat('x', 1000) AS text FROM range(100) t(i) ORDER BY i"
+    )
+
+    assert result.truncated is True
+    assert 0 < result.row_count < 100
+    assert len(json.dumps(result.rows)) <= querying.MAX_RESULT_CHARS
+    assert [row["i"] for row in result.rows] == list(range(result.row_count))
+    assert f"first {result.row_count} rows" in result.note
+    assert "columns you need" in result.note
+
+
+def test_one_row_is_kept_however_wide(conn):
+    result = run_select(
+        f"SELECT repeat('x', {querying.MAX_RESULT_CHARS * 2}) AS text FROM range(3)"
+    )
+    assert result.row_count == 1
+    assert result.truncated is True
+
+
+def test_a_small_result_is_untouched_by_the_size_limit(conn):
+    result = run_select("SELECT i FROM range(500) t(i)", max_rows=500)
+    assert result.row_count == 500
+    assert result.truncated is False
+
+
 @pytest.mark.parametrize("max_rows", [0, -1, querying.MAX_ROWS_CEILING + 1])
 def test_max_rows_is_bounded(conn, max_rows):
     with pytest.raises(InvalidQueryError, match="max_rows"):

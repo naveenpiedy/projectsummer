@@ -209,7 +209,8 @@ def query(sql: str, max_rows: int = DEFAULT_MAX_ROWS) -> QueryResult:
     unnest(genres).
 
     Prefer asking the database for the answer -- counts, averages, top tens --
-    over fetching rows to work it out: results are capped at max_rows, and a
+    over fetching rows to work it out, and select only the columns needed:
+    results are capped at max_rows and at about 20,000 characters, and a
     query is stopped after 30 seconds.
 
     Args:
