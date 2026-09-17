@@ -25,6 +25,10 @@ USERNAME_ENV = "LETTERBOXD_USERNAME"
 #: Environment variable holding the TMDB API read-access token.
 TMDB_TOKEN_ENV = "TMDB_API_KEY"
 
+#: Environment variable that, when set to a true value, stops the MCP server
+#: offering any tool that writes -- whatever each plugin declares.
+MCP_READ_ONLY_ENV = "LETTERBOXD_MCP_READ_ONLY"
+
 
 #: Local settings file. `python-dotenv` finds it by walking up from the
 #: working directory, so it works from anywhere inside a project.
@@ -97,3 +101,18 @@ def username() -> str | None:
     """Return the configured Letterboxd username, or ``None``."""
     _ensure_env_loaded()
     return os.environ.get(USERNAME_ENV) or None
+
+
+def output_dir() -> Path:
+    """Where files made over MCP are written, such as built lists.
+
+    An agent's relative path is resolved here, never against the working
+    directory: a chat client starts the server wherever it likes.
+    """
+    return data_dir() / "output"
+
+
+def mcp_read_only() -> bool:
+    """Whether ``LETTERBOXD_MCP_READ_ONLY`` asks for a read-only MCP server."""
+    _ensure_env_loaded()
+    return os.environ.get(MCP_READ_ONLY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}

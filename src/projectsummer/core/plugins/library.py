@@ -35,7 +35,7 @@ def ingest(export_path: Path) -> IngestResult:
     return ingest_export(export_path)
 
 
-@plugin(name="resolve", category="library", access="write")
+@plugin(name="resolve", category="library", access="write", open_world=True)
 def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> ResolveResult:
     """Look up the TMDB id for each imported film.
 
@@ -62,7 +62,7 @@ def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> ResolveRe
     return resolve_all(limit=limit, delay=delay)
 
 
-@plugin(name="enrich", category="library", access="write")
+@plugin(name="enrich", category="library", access="write", open_world=True)
 def enrich(limit: int | None = None) -> EnrichResult:
     """Fetch film metadata from TMDB and build the queryable tables.
 
@@ -90,7 +90,10 @@ def enrich(limit: int | None = None) -> EnrichResult:
 
 # Exposed over MCP: it only adds what Letterboxd has already published, it
 # takes seconds rather than minutes, and it is how an agent gets a fresh view.
-@plugin(name="sync", category="library", access="write", mcp=True)
+@plugin(
+    name="sync", category="library", access="write", mcp=True,
+    idempotent=True, open_world=True,
+)
 def sync(username: str | None = None) -> SyncResult:
     """Catch up with your recent Letterboxd activity.
 

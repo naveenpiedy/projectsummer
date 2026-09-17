@@ -5,8 +5,8 @@ LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
 > **Status: early development.** The pipeline works end to end — import,
-> resolve, enrich, sync, build lists — and is covered by ~270 tests. The MCP server
-> is not built yet, and most of the analysis plugins are still to come. See
+> resolve, enrich, sync, build lists — and so does the MCP server, all covered
+> by ~400 tests. Most of the analysis plugins are still to come. See
 > [Roadmap](#roadmap).
 
 ## Install
@@ -164,6 +164,68 @@ serves until you press Ctrl+C. Its column explorer shows a histogram and
 summary statistics for each column of a result, but it has no chart builder:
 it profiles one column at a time rather than plotting one against another.
 
+## Using it from an AI assistant
+
+`summer-mcp` serves your library to any [MCP](https://modelcontextprotocol.io/)
+client — Claude Desktop, Claude Code, and others — so you can ask about your
+films in plain language. Install the optional dependencies first:
+
+```bash
+uv sync --extra mcp
+```
+
+For Claude Code:
+
+```bash
+claude mcp add projectsummer -- uv run --directory /path/to/projectsummer --extra mcp summer-mcp
+```
+
+For Claude Desktop, add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "projectsummer": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/projectsummer", "--extra", "mcp", "summer-mcp"]
+    }
+  }
+}
+```
+
+`--directory` also makes the server find your `.env`. Add `--db PATH` to
+serve a library other than the default, or `--read-only` to offer no tool
+that changes anything.
+
+The assistant gets these tools:
+
+| Tool | Does |
+|---|---|
+| `describe_schema` | Tables, then a table's columns, then what a column holds |
+| `query` | One read-only `SELECT` |
+| `overview`, `lists`, `random_watchlist_pick` | The same as the commands |
+| `sync` | Fetches your recent diary entries from Letterboxd's feed |
+| `set_list_ranked` | Marks a list as ranked |
+| `list_builder` | Writes an importable list into the output folder |
+
+The first six only read. Importing, resolving and enriching stay with the CLI:
+they run for minutes, and are yours to start.
+
+What an assistant can do is enforced by the server, not left to the model:
+
+- **Only these tools exist.** Anything else is never registered, so no prompt
+  can reach it.
+- **Reading tools cannot write.** They run on a database connection DuckDB
+  itself keeps read-only, with no access to files outside the library —
+  whatever SQL they are given.
+- **Files go only into the output folder** (`output` in the per-user data
+  directory). An absolute path, or one that climbs out, is refused.
+- **Your own commands are never locked out.** The database is opened for each
+  call and closed straight after, so `summer sync` works while your assistant
+  is open.
+- **Unexpected errors stay private.** A tool's own errors explain themselves;
+  anything else is reported without tracebacks or file paths.
+
 ## How it works
 
 Every feature is one decorated function:
@@ -188,8 +250,8 @@ def random_watchlist_pick(genre: str | None = None) -> WatchlistPick:
 ```
 
 The type hints *are* the schema. The CLI reads the signature to build a
-command; the MCP server will read the same signature to build a tool. Nothing
-is hand-written twice.
+command; the MCP server reads the same signature to build a tool. Nothing is
+hand-written twice.
 
 Parameter names become `--options`, type hints become validation, and the
 docstring's `Args:` section becomes each option's help text. Add `--json` to
@@ -202,16 +264,23 @@ specific — no `dict`, no `Any`, no bare `list`.
 
 A plugin also declares what it may do. `access="read"` (the default) or
 `access="write"`; read plugins are offered over MCP, write plugins only with
-`mcp=True`. Over MCP a read plugin runs on a connection DuckDB will not let
-write to the database or touch the filesystem, so the label is enforced rather
-than trusted.
+`mcp=True`, and a plugin that starts a server never. Over MCP a read plugin
+runs on a connection DuckDB will not let write to the database or touch the
+filesystem, so the label is enforced rather than trusted. `destructive`,
+`idempotent` and `open_world` describe a plugin further; clients may use them
+to decide whether to ask before calling it.
 
 ### Adding your own features
 
 Drop a `.py` file containing decorated functions into a directory and point
 `LETTERBOXD_PLUGIN_PATH` at it. They appear in the CLI alongside the built-ins
-with no need to touch `core/`. A file that fails to import is reported and
-skipped rather than taking the tool down with it.
+with no need to touch `core/`, and in the MCP server under the same rules as
+the built-ins. A file that fails to import is reported and skipped rather than
+taking the tool down with it.
+
+A plugin is ordinary Python running inside the tool, so only add plugins you
+trust: the read-only connection limits what a read plugin can do *through the
+database*, not what its own code can do.
 
 ## Data model
 
@@ -247,6 +316,7 @@ contains a film you have never logged before.
 | `LETTERBOXD_USERNAME` | Username for RSS polling. Defaults to your imported profile. |
 | `LETTERBOXD_DB` | Database location. Defaults to a per-user data directory. |
 | `LETTERBOXD_PLUGIN_PATH` | Extra directories to load plugins from. |
+| `LETTERBOXD_MCP_READ_ONLY` | Set to `true` for an MCP server with no tool that changes anything. |
 
 Copy `.env.example` to `.env` and fill it in. A free TMDB account provides a
 token at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
@@ -273,7 +343,7 @@ interruption mid-run — are exercised deliberately rather than waited for.
 - [x] TMDB metadata enrichment
 - [x] RSS polling to keep the library current
 - [x] List builder: filters or SQL to a Letterboxd-importable list
-- [ ] MCP server
+- [x] MCP server, generated from the same registry
 - [ ] Plugins: trends, taste, list overlap, ranking
 
 ## Attribution and affiliation

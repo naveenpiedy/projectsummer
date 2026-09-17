@@ -6,7 +6,7 @@ build themselves from this registry -- neither one hand-writes a schema, and
 neither can drift from the other.
 
     @plugin(category="discovery")
-    def random_watchlist_pick(genre: str | None = None) -> dict:
+    def random_watchlist_pick(genre: str | None = None) -> WatchlistPick:
         '''Pick a random film from the watchlist.'''
 
 The decorator returns the function untouched, so a plugin stays an ordinary
@@ -80,6 +80,15 @@ class Plugin:
     #: registration: a plugin the server does not offer is never registered
     #: with it, so no client or prompt can reach it.
     mcp: bool = True
+    #: A write that can destroy something already there -- overwriting a
+    #: file, say -- rather than only adding or updating. Advisory, for clients
+    #: deciding whether to ask the user first; it restricts nothing.
+    destructive: bool = False
+    #: Calling again with the same arguments changes nothing further.
+    #: Advisory, like `destructive`.
+    idempotent: bool = False
+    #: Reaches beyond the local library: Letterboxd's site or feed, or TMDB.
+    open_world: bool = False
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -136,6 +145,9 @@ def plugin(
     serves: bool = False,
     access: Access = "read",
     mcp: bool | None = None,
+    destructive: bool = False,
+    idempotent: bool = False,
+    open_world: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a function as a plugin.
 
@@ -153,6 +165,12 @@ def plugin(
         mcp: Whether the MCP server offers this plugin as a tool. Defaults to
             yes for read plugins and no for write plugins, so exposing
             anything that changes state is always a deliberate choice.
+        destructive: A write plugin that can destroy what is already there,
+            such as by overwriting a file. Only meaningful with
+            ``access="write"``.
+        idempotent: Calling again with the same arguments changes nothing
+            further.
+        open_world: Reaches beyond the local library, over the network.
 
     Returns:
         A decorator that registers the function and returns it unchanged.
@@ -170,6 +188,11 @@ def plugin(
         plugin_name = name or func.__name__
         _validate(plugin_name, func)
         exposed = _settle_exposure(plugin_name, serves=serves, access=access, mcp=mcp)
+        if destructive and access == "read":
+            raise PluginError(
+                f"Plugin {plugin_name!r} is marked destructive but has read access; "
+                f"a plugin that cannot write cannot destroy anything."
+            )
 
         existing = _REGISTRY.get(plugin_name)
         if existing is not None and not _is_same_definition(existing.func, func):
@@ -191,6 +214,9 @@ def plugin(
             serves=serves,
             access=access,
             mcp=exposed,
+            destructive=destructive,
+            idempotent=idempotent,
+            open_world=open_world,
         )
         return func
 

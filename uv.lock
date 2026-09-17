@@ -998,6 +998,7 @@ sync = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "fastmcp" },
     { name = "pytest" },
 ]
 
@@ -1015,7 +1016,10 @@ requires-dist = [
 provides-extras = ["mcp", "sync"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
+dev = [
+    { name = "fastmcp", specifier = ">=4,<5" },
+    { name = "pytest", specifier = ">=8.0" },
+]
 
 [[package]]
 name = "py-key-value-aio"

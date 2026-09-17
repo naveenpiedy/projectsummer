@@ -435,15 +435,17 @@ def test_the_command_is_called_summer(app):
 
 
 def test_the_console_script_matches_the_app_name():
-    """pyproject defines the installed command; the app names itself. One name."""
+    """pyproject defines the installed commands; the CLI names itself. One name."""
     import tomllib
     from pathlib import Path as _Path
 
     pyproject = _Path(__file__).resolve().parent.parent / "pyproject.toml"
     scripts = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["scripts"]
 
-    assert list(scripts) == ["summer"]
-    assert scripts["summer"] == "projectsummer.cli:main"
+    assert scripts == {
+        "summer": "projectsummer.cli:main",
+        "summer-mcp": "projectsummer.mcp_server:main",
+    }
 
 
 def test_error_messages_suggest_the_right_command(tmp_path):

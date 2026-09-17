@@ -84,7 +84,7 @@ def show_lists() -> Lists:
     return Lists(lists=rows)
 
 
-@plugin(category="lists", access="write", mcp=True)
+@plugin(category="lists", access="write", mcp=True, idempotent=True)
 def set_list_ranked(slug: str, ranked: bool = True) -> ListRanking:
     """Mark a list as ranked, so its positions are treated as an ordering.
 
@@ -121,8 +121,12 @@ def set_list_ranked(slug: str, ranked: bool = True) -> ListRanking:
 
 
 # Writes a file rather than the database, but that is still a change the
-# user did not make themselves, so it is opted in explicitly.
-@plugin(name="list_builder", category="lists", access="write", mcp=True)
+# user did not make themselves, so it is opted in explicitly. Destructive
+# because it overwrites a file already at that path.
+@plugin(
+    name="list_builder", category="lists", access="write", mcp=True,
+    destructive=True, idempotent=True,
+)
 def list_builder(
     output: Path,
     director: list[str] | None = None,

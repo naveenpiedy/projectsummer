@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 summer = "projectsummer.cli:main"
+summer-mcp = "projectsummer.mcp_server:main"
 
 [project.optional-dependencies]
 mcp = [
@@ -27,6 +28,7 @@ sync = [
 
 [dependency-groups]
 dev = [
+    "fastmcp>=4,<5",
     "pytest>=8.0",
 ]
 

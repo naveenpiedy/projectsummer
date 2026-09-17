@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from export_fixture import write_export
-from projectsummer.core import db
+from projectsummer.core import db, registry
 
 # tmdb_id, title, year, runtime, genres, directors, on_watchlist, watched
 SAMPLE_FILMS = [
@@ -20,6 +20,21 @@ SAMPLE_FILMS = [
     (348, "Alien", 1979, 117, ["Horror", "Science Fiction"], ["Ridley Scott"], True, False),
     (238, "The Godfather", 1972, 175, ["Drama", "Crime"], ["Francis Ford Coppola"], True, True),
 ]
+
+
+@pytest.fixture(autouse=True)
+def restore_registry():
+    """Put the plugin registry back as each test found it.
+
+    Discovery adds plugins and never removes them, which is right for a
+    process that discovers once. Across tests it is not: a throwaway plugin
+    loaded by one test would otherwise turn up as a CLI command or MCP tool
+    in the next.
+    """
+    saved = dict(registry.all_plugins())
+    yield
+    registry.clear()
+    registry._REGISTRY.update(saved)
 
 
 @pytest.fixture
