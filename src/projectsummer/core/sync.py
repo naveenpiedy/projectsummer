@@ -308,6 +308,8 @@ class SyncResult(Result):
     """Diary entries already known whose rating, review or tags changed."""
     already_known: int
     """Diary entries already in the library, unchanged."""
+    new_people: int
+    """People on the new films whose details were fetched from TMDB."""
 
 
 def sync_feed(
@@ -323,7 +325,12 @@ def sync_feed(
         client: A TMDB client for films not seen before.
     """
     from projectsummer import config
-    from projectsummer.core.enrich import MissingTokenError, TMDBClient, store_films
+    from projectsummer.core.enrich import (
+        MissingTokenError,
+        TMDBClient,
+        fetch_people,
+        store_films,
+    )
 
     who = resolve_username(username)
     entries = parse_feed(xml if xml is not None else fetch_feed(who))
@@ -331,7 +338,7 @@ def sync_feed(
     # Films in the feed we have never seen need metadata before a diary entry
     # can refer to them.
     unknown = sorted({e.tmdb_id for e in entries} - known_film_ids([e.tmdb_id for e in entries]))
-    fetched = 0
+    fetched = new_people = 0
     if unknown:
         if client is None:
             token = config.tmdb_token()
@@ -349,6 +356,9 @@ def sync_feed(
                 rows.append(row)
         store_films(rows)
         fetched = len(rows)
+        # Only the people on these films: sync stays quick even when an
+        # earlier enrich left others waiting for their details.
+        new_people = fetch_people(client, films=[row["tmdb_id"] for row in rows]).fetched
 
     counts = {"added": 0, "updated": 0, "unchanged": 0}
     available = known_film_ids([e.tmdb_id for e in entries])
@@ -371,6 +381,7 @@ def sync_feed(
         new_entries=counts["added"],
         updated_entries=counts["updated"],
         already_known=counts["unchanged"],
+        new_people=new_people,
     )
 
 

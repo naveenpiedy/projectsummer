@@ -68,16 +68,21 @@ def enrich(limit: int | None = None) -> EnrichResult:
 
     Run this after `resolve`. It fetches cast, crew, genres, runtime and
     ratings for every resolved film, overlays your own viewing data, and
-    rebuilds your diary -- one row per viewing, so rewatches are kept.
+    rebuilds your diary -- one row per viewing, so rewatches are kept. Then
+    it fetches each credited person's details: birthday, birthplace, other
+    names.
 
-    Roughly a thousand films per minute. Safe to interrupt: a second run
-    fetches only what is still missing.
+    Films take about a minute per thousand. People take longer -- a
+    library of a thousand films credits several thousand people, one
+    request each -- but only once. Safe to interrupt: a second run fetches
+    only what is still missing, and people come last, so everything else is
+    already done.
 
     Needs a TMDB API token in TMDB_API_KEY. A free account provides one at
     https://www.themoviedb.org/settings/api
 
     Args:
-        limit: Only fetch this many films, for a trial run.
+        limit: Only fetch this many films, and this many people, for a trial run.
 
     Returns:
         Counts of what was fetched and built.

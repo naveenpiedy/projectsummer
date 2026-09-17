@@ -14,6 +14,7 @@ from projectsummer.core import credits, db
 from projectsummer.core.enrich import (
     MissingTokenError,
     as_film_row,
+    as_person_details,
     enrich_all,
     rebuild_diary,
     store_films,
@@ -95,13 +96,42 @@ def tmdb_credits(tmdb_id=27205):
     }
 
 
+def person_response(person_id):
+    """A TMDB person record shaped like the real thing."""
+    return {
+        "id": person_id,
+        "name": f"Person {person_id}",
+        "birthday": "1970-07-30",
+        "deathday": None,
+        "place_of_birth": "Chennai, Tamil Nadu, India",
+        "also_known_as": [f"Alias {person_id}", ""],
+        "imdb_id": f"nm{person_id}",
+        # Credits leave the dialogue writer's gender unset; their own record
+        # has it. Everyone else's record leaves it to what credits said.
+        "gender": 1 if person_id == 601 else 0,
+        "known_for_department": "Writing",
+        "biography": "Not kept.",
+    }
+
+
 class FakeClient:
     """Stands in for TMDBClient, recording what was asked for."""
 
-    def __init__(self, responses=None, missing=()):
+    def __init__(self, responses=None, missing=(), missing_people=(), fail_person_after=None):
         self.responses = responses or {}
         self.missing = set(missing)
+        self.missing_people = set(missing_people)
+        self.fail_person_after = fail_person_after
         self.requested: list[int] = []
+        self.people_requested: list[int] = []
+
+    def fetch_person(self, person_id, max_retries=3):
+        if self.fail_person_after is not None and len(self.people_requested) >= self.fail_person_after:
+            raise KeyboardInterrupt  # someone pressing Ctrl+C mid-run
+        self.people_requested.append(person_id)
+        if person_id in self.missing_people:
+            return None
+        return as_person_details(person_id, person_response(person_id))
 
     def fetch_movie(self, tmdb_id, max_retries=3):
         self.requested.append(tmdb_id)
@@ -362,6 +392,10 @@ def test_a_question_about_people_is_answerable(resolved):
         """
     )
     assert [row["name"] for row in women] == ["A Lyricist", "A Singer", "Emma Thomas"]
+
+
+def test_a_gender_credits_do_not_record_is_stored_as_unknown(empty_conn):
+    store_films([as_film_row(27205, tmdb_response())])
     unknown = db.query("SELECT gender FROM people WHERE person_id = 601")[0]
     assert unknown["gender"] is None
 
@@ -437,3 +471,181 @@ def test_a_film_and_its_credits_are_stored_together_or_not_at_all(empty_conn, mo
         store_films([as_film_row(27205, tmdb_response())])
 
     assert db.query("SELECT count(*) AS n FROM films")[0]["n"] == 0
+
+
+# ------------------------------------------------------------ person details
+
+def test_enrich_fetches_each_credited_person_once(resolved):
+    client = FakeClient()
+    report = enrich_all(client=client)
+
+    assert sorted(client.people_requested) == sorted(set(client.people_requested))
+    assert len(client.people_requested) == PEOPLE
+    assert report.people_fetched == PEOPLE
+    assert report.people_pending == 0
+    assert db.query("SELECT count(*) AS n FROM people WHERE details_fetched_at IS NULL")[0]["n"] == 0
+
+
+def test_details_are_stored_with_their_types(resolved):
+    enrich_all(client=FakeClient())
+    nolan = db.query("SELECT * FROM people WHERE person_id = 525")[0]
+
+    assert str(nolan["birthday"]) == "1970-07-30"
+    assert nolan["deathday"] is None
+    assert nolan["place_of_birth"] == "Chennai, Tamil Nadu, India"
+    assert nolan["also_known_as"] == ["Alias 525"]  # the empty alias is dropped
+    assert nolan["imdb_id"] == "nm525"
+    assert db.query("SELECT count(*) AS n FROM people WHERE person_id IN "
+                    "(SELECT person_id FROM people WHERE contains(place_of_birth, 'Chennai'))")[0]["n"] == PEOPLE
+
+
+def test_a_persons_own_record_fills_a_gender_their_credits_lacked(resolved):
+    enrich_all(client=FakeClient())
+    assert db.query("SELECT gender FROM people WHERE person_id = 601")[0]["gender"] == "female"
+
+
+def test_a_second_run_fetches_no_one_again(resolved):
+    enrich_all(client=FakeClient())
+    again = FakeClient()
+    report = enrich_all(client=again)
+
+    assert again.people_requested == []
+    assert report.people_fetched == 0
+
+
+def test_a_person_tmdb_no_longer_has_is_not_asked_for_forever(resolved):
+    report = enrich_all(client=FakeClient(missing_people={556}))
+    assert report.people_not_on_tmdb == 1
+
+    emma = db.query("SELECT * FROM people WHERE person_id = 556")[0]
+    assert emma["details_fetched_at"] is not None
+    assert emma["birthday"] is None
+    assert emma["gender"] == "female"  # what credits said is kept
+
+    again = FakeClient()
+    enrich_all(client=again)
+    assert 556 not in again.people_requested
+
+
+def test_an_interrupted_run_keeps_what_it_fetched(resolved, monkeypatch):
+    from projectsummer.core import enrich
+
+    monkeypatch.setattr(enrich, "PEOPLE_BATCH", 5)
+    with pytest.raises(KeyboardInterrupt):
+        enrich_all(client=FakeClient(fail_person_after=12))
+
+    fetched = db.query("SELECT count(*) AS n FROM people WHERE details_fetched_at IS NOT NULL")[0]["n"]
+    assert fetched == 10  # two full batches of five; the partial third is lost
+
+    resumed = FakeClient()
+    report = enrich_all(client=resumed)
+    assert len(resumed.people_requested) == PEOPLE - 10
+    assert report.people_pending == 0
+
+
+def test_interrupting_the_people_phase_leaves_the_rest_complete(resolved):
+    with pytest.raises(KeyboardInterrupt):
+        enrich_all(client=FakeClient(fail_person_after=0))
+
+    assert db.query("SELECT count(*) AS n FROM films")[0]["n"] == 4
+    assert db.query("SELECT count(*) AS n FROM diary_entries")[0]["n"] == 3
+    assert db.query("SELECT watched FROM films WHERE tmdb_id = 694")[0]["watched"] is True
+
+
+def test_limit_caps_people_too(resolved):
+    client = FakeClient()
+    report = enrich_all(limit=2, client=client)
+
+    assert len(client.people_requested) == 2
+    assert report.people_pending == PEOPLE - 2
+
+
+# ------------------------------------------------------------ the TMDB client
+#
+# The client's retry rules decide how a long run behaves when TMDB is busy or
+# the network blips, so they are tested against a scripted session rather
+# than left to be discovered twenty minutes into a real run.
+
+class _Response:
+    def __init__(self, status, payload=None, headers=None):
+        self.status_code = status
+        self._payload = payload or {}
+        self.headers = headers or {}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        import requests
+        raise requests.HTTPError(f"{self.status_code}")
+
+
+class _Session:
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.headers = {}
+        self.urls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.urls.append(url)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    from projectsummer.core import enrich
+
+    recorded = []
+    monkeypatch.setattr(enrich.time, "sleep", recorded.append)
+    return recorded
+
+
+def _client(*outcomes):
+    from projectsummer.core.enrich import TMDBClient
+
+    return TMDBClient("token", session=_Session(*outcomes))
+
+
+def test_fetch_person_reads_a_person_record(sleeps):
+    client = _client(_Response(200, person_response(525)))
+    details = client.fetch_person(525)
+
+    assert details["imdb_id"] == "nm525"
+    assert client.session.urls == ["https://api.themoviedb.org/3/person/525"]
+
+
+def test_a_missing_person_is_none_without_retrying(sleeps):
+    client = _client(_Response(404))
+    assert client.fetch_person(1) is None
+    assert len(client.session.urls) == 1
+
+
+def test_being_rate_limited_waits_as_told_then_retries(sleeps):
+    client = _client(_Response(429, headers={"Retry-After": "3"}), _Response(200, person_response(7)))
+    assert client.fetch_person(7)["person_id"] == 7
+    assert 3 in sleeps
+
+
+def test_a_network_blip_is_retried(sleeps):
+    import requests
+
+    client = _client(requests.ConnectionError("blip"), _Response(200, person_response(7)))
+    assert client.fetch_person(7)["person_id"] == 7
+
+
+def test_a_persistent_server_error_is_raised_not_swallowed(sleeps):
+    import requests
+
+    client = _client(_Response(500), _Response(500), _Response(500))
+    with pytest.raises(requests.HTTPError):
+        client.fetch_person(7)
+
+
+def test_films_go_through_the_same_client_rules(sleeps):
+    client = _client(_Response(429, headers={"Retry-After": "1"}), _Response(200, tmdb_response(27205)))
+    row = client.fetch_movie(27205)
+    assert row["directors"] == ["Christopher Nolan"]
+    assert "append_to_response" not in client.session.urls[0]  # sent as params

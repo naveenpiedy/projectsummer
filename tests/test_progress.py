@@ -169,8 +169,10 @@ def test_enrich_reports_progress_and_its_final_steps(empty_conn, export):
     with progress.reporting_to(reporter):
         enrich_all(client=FakeClient())
 
-    assert reporter.tasks == [("Fetching metadata from TMDB", 4)]
-    assert reporter.advances == 4
+    # Films, then the 18 people credited on them -- the longest step, so it
+    # needs a bar of its own.
+    assert reporter.tasks == [("Fetching metadata from TMDB", 4), ("Fetching people from TMDB", 18)]
+    assert reporter.advances == 4 + 18
     # The steps after fetching take a while on a big library and would
     # otherwise look like a hang.
     assert reporter.notes == ["Applying your viewing data", "Rebuilding diary entries"]

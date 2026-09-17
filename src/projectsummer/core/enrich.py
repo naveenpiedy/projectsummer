@@ -8,6 +8,9 @@ takes it from there, and never touches Letterboxd:
    credits and the people they name are stored together (see `credits.py`).
 2. Overlay your own data: watched, rating, watchlist, likes.
 3. Rebuild `diary_entries`, one row per viewing.
+4. Fetch the details of each credited person -- birthday, birthplace and so on
+   -- one request per person, and only once. This comes last because it is
+   by far the longest step, so interrupting it leaves everything else done.
 
 Multi-value fields become DuckDB LISTs rather than the pipe-separated strings
 the previous version used, so `list_contains(genres, 'Horror')` works without
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -57,18 +61,35 @@ class TMDBClient:
         )
 
     def fetch_movie(self, tmdb_id: int, max_retries: int = 3) -> dict[str, Any] | None:
-        """Fetch one film, or None if TMDB does not have it.
+        """Fetch one film, or None if TMDB does not have it."""
+        data = self._get(
+            f"/movie/{tmdb_id}",
+            params={"append_to_response": APPEND_TO_RESPONSE},
+            max_retries=max_retries,
+        )
+        return None if data is None else as_film_row(tmdb_id, data)
+
+    def fetch_person(self, person_id: int, max_retries: int = 3) -> dict[str, Any] | None:
+        """Fetch one person's details, or None if TMDB no longer has them."""
+        data = self._get(f"/person/{person_id}", max_retries=max_retries)
+        return None if data is None else as_person_details(person_id, data)
+
+    def _get(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        max_retries: int = 3,
+    ) -> dict[str, Any] | None:
+        """GET a TMDB endpoint, or None if what it names does not exist.
 
         Handles the two failure modes worth distinguishing: a 404 means the
-        film is genuinely gone and retrying is pointless, while a 429 means
+        thing is genuinely gone and retrying is pointless, while a 429 means
         slow down and try again.
         """
         for attempt in range(max_retries):
             try:
                 response = self.session.get(
-                    f"{TMDB_BASE}/movie/{tmdb_id}",
-                    params={"append_to_response": APPEND_TO_RESPONSE},
-                    timeout=TIMEOUT,
+                    f"{TMDB_BASE}{path}", params=params, timeout=TIMEOUT
                 )
             except requests.RequestException:
                 if attempt == max_retries - 1:
@@ -88,7 +109,7 @@ class TMDBClient:
                 continue
 
             time.sleep(RATE_LIMIT_DELAY)
-            return as_film_row(tmdb_id, response.json())
+            return response.json()
 
         return None
 
@@ -140,6 +161,24 @@ def names_of(entries: list[dict[str, Any]] | None, key: str = "name") -> list[st
         return None
     found = [entry[key] for entry in entries if entry.get(key)]
     return found or None
+
+
+def as_person_details(person_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    """The fields of a TMDB person record that credits do not carry.
+
+    Gender and main department come too: credits sometimes lack them where
+    the person's own record has them.
+    """
+    return {
+        "person_id": person_id,
+        "birthday": data.get("birthday") or None,
+        "deathday": data.get("deathday") or None,
+        "place_of_birth": data.get("place_of_birth") or None,
+        "also_known_as": [name for name in data.get("also_known_as") or [] if name] or None,
+        "imdb_id": data.get("imdb_id") or None,
+        "gender": film_credits.GENDERS.get(data.get("gender") or 0),
+        "known_for_department": data.get("known_for_department") or None,
+    }
 
 
 # ----------------------------------------------------------------- storage
@@ -329,6 +368,131 @@ def store_credits(
     )
 
 
+_PERSON_DETAILS_JSON = (
+    '[{"person_id": "BIGINT", "birthday": "VARCHAR", "deathday": "VARCHAR", '
+    '"place_of_birth": "VARCHAR", "also_known_as": ["VARCHAR"], "imdb_id": "VARCHAR", '
+    '"gender": "VARCHAR", "known_for_department": "VARCHAR"}]'
+)
+
+
+def store_person_details(details: list[dict[str, Any]], gone: list[int]) -> None:
+    """Record fetched details, and mark people TMDB no longer has as done.
+
+    A person who is gone is marked fetched anyway, with their details left
+    empty -- otherwise every run would ask for them again, forever.
+    """
+    if not details and not gone:
+        return
+
+    conn = db.get_connection()
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        if details:
+            conn.execute(
+                f"""
+                UPDATE people SET
+                    birthday = try_cast(d.birthday AS DATE),
+                    deathday = try_cast(d.deathday AS DATE),
+                    place_of_birth = d.place_of_birth,
+                    also_known_as = d.also_known_as,
+                    imdb_id = d.imdb_id,
+                    gender = coalesce(d.gender, people.gender),
+                    known_for_department = coalesce(d.known_for_department,
+                                                    people.known_for_department),
+                    details_fetched_at = now()
+                FROM (
+                    SELECT r.person_id, r.birthday, r.deathday, r.place_of_birth,
+                           r.also_known_as, r.imdb_id, r.gender, r.known_for_department
+                    FROM (SELECT unnest(json_transform(?, '{_PERSON_DETAILS_JSON}')) AS r)
+                ) AS d
+                WHERE people.person_id = d.person_id
+                """,
+                [json.dumps(details)],
+            )
+        if gone:
+            conn.execute(
+                "UPDATE people SET details_fetched_at = now() "
+                "WHERE person_id IN (SELECT unnest(?::BIGINT[]))",
+                [gone],
+            )
+        conn.execute("COMMIT")
+    except BaseException:
+        try:
+            conn.execute("ROLLBACK")
+        except duckdb.Error:
+            pass
+        raise
+
+
+def pending_people(limit: int | None = None, films: list[int] | None = None) -> list[int]:
+    """Credited people whose details have not been fetched yet.
+
+    Args:
+        limit: At most this many.
+        films: Only people credited on these films.
+    """
+    conditions = ["p.details_fetched_at IS NULL"]
+    params: list[Any] = []
+    if films is not None:
+        conditions.append("c.tmdb_id IN (SELECT unnest(?::BIGINT[]))")
+        params.append(films)
+    rows = db.query(
+        f"""
+        SELECT DISTINCT p.person_id
+        FROM people p
+        JOIN film_credits c ON c.person_id = p.person_id
+        WHERE {" AND ".join(conditions)}
+        ORDER BY p.person_id
+        {"LIMIT " + str(int(limit)) if limit else ""}
+        """,
+        params,
+    )
+    return [row["person_id"] for row in rows]
+
+
+#: People whose details are written to the database together. Small enough
+#: that an interruption loses little, large enough that writes stay cheap.
+PEOPLE_BATCH = 100
+
+
+@dataclass(frozen=True, slots=True)
+class PeopleFetch:
+    """What a round of person-detail fetching did."""
+
+    fetched: int
+    gone: int
+
+
+def fetch_people(
+    client: TMDBClient,
+    limit: int | None = None,
+    films: list[int] | None = None,
+) -> PeopleFetch:
+    """Fetch details for credited people who do not have them yet.
+
+    Written in batches as they arrive, so an interrupted run keeps what it
+    fetched and the next one carries on from there.
+    """
+    pending = pending_people(limit=limit, films=films)
+    details: list[dict[str, Any]] = []
+    gone: list[int] = []
+    fetched = missing = 0
+
+    for person_id in progress.track(pending, "Fetching people from TMDB"):
+        found = client.fetch_person(person_id)
+        if found is None:
+            gone.append(person_id)
+        else:
+            details.append(found)
+        if len(details) + len(gone) >= PEOPLE_BATCH:
+            store_person_details(details, gone)
+            fetched, missing = fetched + len(details), missing + len(gone)
+            details, gone = [], []
+
+    store_person_details(details, gone)
+    return PeopleFetch(fetched=fetched + len(details), gone=missing + len(gone))
+
+
 def pending_ids(limit: int | None = None) -> list[int]:
     """Resolved films whose metadata has not been fetched yet."""
     rows = db.query(
@@ -457,6 +621,12 @@ class EnrichResult(Result):
     """Imported diary rows with no enriched film to attach to."""
     still_pending: int
     """Resolved films still waiting to be fetched."""
+    people_fetched: int
+    """People whose birthday, birthplace and other details were fetched."""
+    people_not_on_tmdb: int
+    """Of those asked for, people TMDB no longer has."""
+    people_pending: int
+    """Credited people still waiting for their details."""
 
 
 def enrich_all(
@@ -464,10 +634,12 @@ def enrich_all(
     token: str | None = None,
     client: TMDBClient | None = None,
 ) -> EnrichResult:
-    """Fetch metadata for everything resolved, then build the real tables.
+    """Fetch metadata for everything resolved, build the real tables, then people.
 
-    Safe to interrupt and re-run: films are written in batches as they are
-    fetched, and a second run picks up only what is still missing.
+    Safe to interrupt and re-run: films and people are written in batches as
+    they are fetched, and a second run picks up only what is still missing.
+    People come last, so an interruption there leaves films, your viewing
+    data and the diary complete.
     """
     from projectsummer import config
 
@@ -502,6 +674,8 @@ def enrich_all(
     progress.note("Rebuilding diary entries")
     diary = rebuild_diary()
 
+    people = fetch_people(client, limit=limit)
+
     return EnrichResult(
         attempted=len(pending),
         enriched=len(pending) - len(missing),
@@ -511,4 +685,7 @@ def enrich_all(
         diary_entries=diary.diary_entries,
         unmatched=diary.unmatched,
         still_pending=len(pending_ids()),
+        people_fetched=people.fetched,
+        people_not_on_tmdb=people.gone,
+        people_pending=len(pending_people()),
     )

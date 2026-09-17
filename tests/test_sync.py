@@ -23,7 +23,7 @@ from projectsummer.core.sync import (
 )
 
 from export_fixture import ALIEN, GODFATHER, SHINING, UNSEEN
-from test_enrich import FakeClient
+from test_enrich import FakeClient, tmdb_response
 
 SHINING_TMDB, ALIEN_TMDB, GODFATHER_TMDB, SOLARIS_TMDB = 694, 348, 238, 393
 NEW_FILM_TMDB = 1234
@@ -343,3 +343,30 @@ def test_a_new_film_from_the_feed_arrives_with_its_credits(library):
     assert db.query(
         "SELECT count(*) AS n FROM (SELECT person_id FROM people GROUP BY 1 HAVING count(*) > 1)"
     )[0]["n"] == 0
+
+
+def test_sync_fetches_details_only_for_people_on_the_new_films(library):
+    newcomer = tmdb_response(NEW_FILM_TMDB, "Newcomer")
+    newcomer["credits"]["crew"].append({
+        "id": 9001, "credit_id": f"{NEW_FILM_TMDB}-9001", "name": "New Director",
+        "gender": 1, "job": "Director", "department": "Directing",
+    })
+    client = FakeClient(responses={NEW_FILM_TMDB: newcomer})
+
+    report = sync_feed(username="someone",
+                       xml=feed(watch_item(NEW_FILM_TMDB, "Newcomer")), client=client)
+
+    # Everyone else was fetched when the library was enriched.
+    assert client.people_requested == [9001]
+    assert report.new_people == 1
+    assert db.query("SELECT imdb_id FROM people WHERE person_id = 9001")[0]["imdb_id"] == "nm9001"
+
+
+def test_sync_leaves_people_an_earlier_enrich_did_not_reach(library):
+    db.get_connection().execute("UPDATE people SET details_fetched_at = NULL")
+    client = FakeClient()
+
+    report = sync_feed(username="someone", xml=feed(watch_item(ALIEN_TMDB, "Alien")), client=client)
+
+    assert client.people_requested == []
+    assert report.new_people == 0
