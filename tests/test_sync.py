@@ -329,3 +329,17 @@ def test_the_integrity_view_stays_empty_after_syncing(library):
     sync_feed(username="someone",
               xml=feed(watch_item(NEW_FILM_TMDB, "Newcomer")), client=FakeClient())
     assert db.query("SELECT * FROM integrity_orphans") == []
+
+
+def test_a_new_film_from_the_feed_arrives_with_its_credits(library):
+    sync_feed(username="someone",
+              xml=feed(watch_item(NEW_FILM_TMDB, "Newcomer")), client=FakeClient())
+
+    credits = db.query(
+        "SELECT count(*) AS n FROM film_credits WHERE tmdb_id = ?", [NEW_FILM_TMDB]
+    )[0]["n"]
+    assert credits > 0
+    # The people were already known from the enriched library: no duplicates.
+    assert db.query(
+        "SELECT count(*) AS n FROM (SELECT person_id FROM people GROUP BY 1 HAVING count(*) > 1)"
+    )[0]["n"] == 0

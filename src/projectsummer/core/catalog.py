@@ -32,6 +32,8 @@ PUBLIC_RELATIONS = (
     "films",
     "diary_entries",
     "film_watch_stats",
+    "people",
+    "film_credits",
     "lists",
     "list_entries",
     "profile",
@@ -40,7 +42,14 @@ PUBLIC_RELATIONS = (
 #: Pipeline machinery. Queryable, but a wrong place to look for answers:
 #: `staging_films` looks like `films` and holds pre-enrichment data.
 INTERNAL_RELATIONS = frozenset(
-    {"staging_films", "staging_diary", "film_identity", "sync_state", "integrity_orphans"}
+    {
+        "staging_films",
+        "staging_diary",
+        "film_identity",
+        "film_credit_fetches",
+        "sync_state",
+        "integrity_orphans",
+    }
 )
 
 TOP_VALUES = 10

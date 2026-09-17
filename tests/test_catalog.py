@@ -210,3 +210,16 @@ def test_every_level_works_read_only(tmp_path):
             assert found.column.values[0].value == "Stanley Kubrick"
     finally:
         db.close_connection()
+
+
+def test_the_role_description_names_every_role(conn):
+    """The description is what tells an agent which roles exist; it must not
+    fall behind the mapping in code."""
+    from projectsummer.core import credits
+
+    role = next(
+        column for column in describe_schema(table="film_credits").table.columns
+        if column.name == "role"
+    )
+    missing = [name for name in credits.roles() if name not in role.description]
+    assert missing == []

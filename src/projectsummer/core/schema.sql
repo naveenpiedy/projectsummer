@@ -4,9 +4,16 @@
 --   * `films` stays deliberately wide. Multi-value fields use DuckDB's native
 --     LIST type rather than the pipe-separated strings of the previous version,
 --     so `list_contains(genres, 'Horror')` and `UNNEST(genres)` work directly.
---   * `diary_entries` is the one concession to a second table: a film's watch
+--   * `diary_entries` is the first concession to a second table: a film's watch
 --     history is genuinely one-to-many, and streaks / rating drift / year-in-
 --     review cannot be computed from collapsed first/last dates.
+--   * `people` and `film_credits` are the second. A person's gender or birthday
+--     belongs to the person, not to each film, and a name is not an identity:
+--     two people can share one. The name lists on `films` stay, as the simple
+--     path; both are written from the same TMDB response in one transaction.
+--   * New tables reach existing databases on their own, because every CREATE is
+--     IF NOT EXISTS. New or changed columns on an existing table do not -- that
+--     needs a SCHEMA_VERSION bump, and with no migrations, a rebuild.
 --   * All DDL is idempotent so `init_schema()` is safe to call on every open.
 --   * There are deliberately NO foreign keys. DuckDB 1.5 rejects updating a
 --     LIST column on a row that a foreign key references, when inside a
@@ -220,6 +227,56 @@ CREATE TABLE IF NOT EXISTS film_identity (
 
 CREATE INDEX IF NOT EXISTS film_identity_slug ON film_identity (letterboxd_slug);
 
+-- ============================================================ people
+-- One row per person, keyed by TMDB's person id. The columns up to
+-- profile_path arrive with every film's credits; the rest need one extra call
+-- per person, so they stay NULL until that call is made. Every column exists
+-- from the start, even while empty: adding one later would need a rebuild.
+
+CREATE TABLE IF NOT EXISTS people (
+    person_id            BIGINT PRIMARY KEY,
+    name                 VARCHAR NOT NULL,
+    original_name        VARCHAR,
+    gender               VARCHAR,          -- 'female', 'male', 'non-binary'; NULL = unknown
+    known_for_department VARCHAR,
+    popularity           DOUBLE,
+    profile_path         VARCHAR,
+    -- From the person's own TMDB record
+    birthday             DATE,
+    deathday             DATE,
+    place_of_birth       VARCHAR,
+    also_known_as        VARCHAR[],
+    imdb_id              VARCHAR,
+    details_fetched_at   TIMESTAMP
+);
+
+-- ============================================================ film_credits
+-- One row per person per part in a film: someone who wrote and directed a
+-- film has two rows. Only the leading cast and a chosen set of crew jobs are
+-- kept; see projectsummer.core.credits.
+
+CREATE TABLE IF NOT EXISTS film_credits (
+    credit_id      VARCHAR PRIMARY KEY,    -- TMDB's own id for the credit
+    tmdb_id        BIGINT  NOT NULL,
+    person_id      BIGINT  NOT NULL,
+    role           VARCHAR NOT NULL,       -- plain role: 'actor', 'director', 'writer', ...
+    job            VARCHAR NOT NULL,       -- TMDB's job, e.g. 'Screenplay'
+    department     VARCHAR NOT NULL,
+    character      VARCHAR,
+    billing_order  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS film_credits_tmdb_id ON film_credits (tmdb_id);
+CREATE INDEX IF NOT EXISTS film_credits_person_id ON film_credits (person_id);
+
+-- Films whose credits have been stored. A film can legitimately have no kept
+-- credits at all, so the absence of rows in film_credits cannot say whether
+-- they were ever fetched.
+CREATE TABLE IF NOT EXISTS film_credit_fetches (
+    tmdb_id     BIGINT PRIMARY KEY,
+    fetched_at  TIMESTAMP NOT NULL
+);
+
 -- ============================================================ views
 
 -- Dangling references, which foreign keys would have rejected outright had
@@ -243,6 +300,18 @@ SELECT 'list_entries', 'tmdb_id', e.tmdb_id, count(*)
 FROM list_entries e
 LEFT JOIN films f ON f.tmdb_id = e.tmdb_id
 WHERE e.tmdb_id IS NOT NULL AND f.tmdb_id IS NULL
+GROUP BY 1, 2, 3
+UNION ALL
+SELECT 'film_credits', 'tmdb_id', c.tmdb_id, count(*)
+FROM film_credits c
+LEFT JOIN films f ON f.tmdb_id = c.tmdb_id
+WHERE f.tmdb_id IS NULL
+GROUP BY 1, 2, 3
+UNION ALL
+SELECT 'film_credits', 'person_id', c.person_id, count(*)
+FROM film_credits c
+LEFT JOIN people p ON p.person_id = c.person_id
+WHERE p.person_id IS NULL
 GROUP BY 1, 2, 3;
 
 -- Watch history rolled up per film. Derived, never written to -- the old
@@ -282,7 +351,7 @@ COMMENT ON COLUMN films.tagline IS 'TMDB tagline.';
 COMMENT ON COLUMN films.poster_path IS 'TMDB poster path; prefix https://image.tmdb.org/t/p/w500 to view it.';
 COMMENT ON COLUMN films.directors IS 'Directors as TMDB credits them. A list, NULL when unknown: filter with list_contains(directors, ''Name''), which needs the exact spelling.';
 COMMENT ON COLUMN films.cast_members IS 'Up to ten leading cast members, in billing order. A list. (Not called cast, which is a SQL keyword.)';
-COMMENT ON COLUMN films.writers IS 'Writers, screenplay and story credits. A list.';
+COMMENT ON COLUMN films.writers IS 'Screenplay, writer, story, novel and dialogue credits. A list. For a writer''s gender, birthday and other films, use film_credits and people.';
 COMMENT ON COLUMN films.composers IS 'Composers of the original music. A list.';
 COMMENT ON COLUMN films.cinematographers IS 'Directors of photography. A list.';
 COMMENT ON COLUMN films.editors IS 'Editors. A list.';
@@ -359,6 +428,32 @@ COMMENT ON COLUMN film_watch_stats.first_watched_date IS 'Earliest watched_date 
 COMMENT ON COLUMN film_watch_stats.last_watched_date IS 'Latest watched_date in the diary.';
 COMMENT ON COLUMN film_watch_stats.rewatch_count IS 'Diary entries marked as rewatches.';
 
+COMMENT ON TABLE people IS 'One row per person credited on your films: the leading cast and chosen crew. Keyed by person_id; join film_credits to see their films. NULL gender, birthday or birthplace means TMDB does not record it, not that it does not apply, so a filter on them silently leaves those people out. Coverage is thinner for crew and for films outside English.';
+COMMENT ON COLUMN people.person_id IS 'TMDB person id. Primary key; joins to film_credits.person_id.';
+COMMENT ON COLUMN people.name IS 'Name as TMDB gives it, usually in Latin script. Two people can share a name, so group by person_id.';
+COMMENT ON COLUMN people.original_name IS 'Name in its original script, e.g. Tamil, when TMDB has one; often the same as name.';
+COMMENT ON COLUMN people.gender IS 'female, male or non-binary, as recorded on TMDB. NULL when TMDB has no record: unknown, not a fourth value.';
+COMMENT ON COLUMN people.known_for_department IS 'What TMDB says the person is mainly known for, e.g. Acting, Directing, Writing, Sound.';
+COMMENT ON COLUMN people.popularity IS 'TMDB popularity score. Relative, and changes daily.';
+COMMENT ON COLUMN people.profile_path IS 'TMDB profile image path; prefix https://image.tmdb.org/t/p/w185 to view it.';
+COMMENT ON COLUMN people.birthday IS 'Date of birth. NULL until the person''s details are fetched, or when TMDB does not know it.';
+COMMENT ON COLUMN people.deathday IS 'Date of death, for people who have died. NULL for the living and when unknown.';
+COMMENT ON COLUMN people.place_of_birth IS 'Place of birth as free text, e.g. ''Chennai, Tamil Nadu, India''. Filter with contains(), not =.';
+COMMENT ON COLUMN people.also_known_as IS 'Other names and spellings, often in other scripts. A list.';
+COMMENT ON COLUMN people.imdb_id IS 'IMDb person id, e.g. nm0000229, when TMDB has one.';
+COMMENT ON COLUMN people.details_fetched_at IS 'When birthday, birthplace and other names were last fetched. NULL means not yet, so those columns are empty for now rather than unknown.';
+
+COMMENT ON TABLE film_credits IS 'Who did what on each film: one row per person per part, so someone who wrote and directed a film has two rows. Join films on tmdb_id and people on person_id. Only the ten leading cast and a chosen set of crew roles are kept, so a person absent here may still have worked on the film.';
+COMMENT ON COLUMN film_credits.credit_id IS 'TMDB''s id for this credit. Primary key.';
+COMMENT ON COLUMN film_credits.tmdb_id IS 'The film. Joins to films.tmdb_id.';
+COMMENT ON COLUMN film_credits.person_id IS 'The person. Joins to people.person_id.';
+COMMENT ON COLUMN film_credits.role IS 'Plain role, one of: actor, director, co-director, writer, lyricist, cinematographer, editor, composer, playback singer, production designer, costume designer, producer. Filter on this rather than job.';
+COMMENT ON COLUMN film_credits.job IS 'TMDB''s own job name, e.g. Screenplay, Story, Dialogue or Novel within writer. Actor for cast.';
+COMMENT ON COLUMN film_credits.department IS 'TMDB''s department, e.g. Acting, Directing, Writing, Sound.';
+COMMENT ON COLUMN film_credits.character IS 'The character played, for actors. NULL for crew.';
+COMMENT ON COLUMN film_credits.billing_order IS 'Position in the cast list, from 0 for the lead. NULL for crew.';
+
+COMMENT ON TABLE film_credit_fetches IS 'Internal: which films have had their credits stored, so enrichment knows which still need fetching.';
 COMMENT ON TABLE staging_films IS 'Internal: film data from the last imported export, before enrichment. Query films instead.';
 COMMENT ON TABLE staging_diary IS 'Internal: diary rows from the last imported export, before enrichment. Query diary_entries instead.';
 COMMENT ON TABLE film_identity IS 'Internal: cache of Letterboxd link to TMDB id lookups, so each film is looked up once.';

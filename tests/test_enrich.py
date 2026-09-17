@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from projectsummer.core import db, enrich
+from projectsummer.core import credits, db
 from projectsummer.core.enrich import (
     MissingTokenError,
     as_film_row,
-    crew_named,
     enrich_all,
-    leading_cast,
     rebuild_diary,
+    store_films,
 )
 from projectsummer.core.ingest import ingest_export
 from projectsummer.core.resolve import Identity, remember
@@ -49,19 +48,50 @@ def tmdb_response(tmdb_id=27205, title="Inception", release="2010-07-15"):
         "production_countries": [{"name": "United States of America"}],
         "external_ids": {"imdb_id": "tt1375666", "facebook_id": "inception"},
         "keywords": {"keywords": [{"name": "dream"}, {"name": "heist"}]},
-        "credits": {
-            "cast": [{"name": f"Actor {i}"} for i in range(1, 16)],
-            "crew": [
-                {"name": "Christopher Nolan", "job": "Director", "department": "Directing"},
-                # Credited twice -- must appear once.
-                {"name": "Christopher Nolan", "job": "Writer", "department": "Writing"},
-                {"name": "Christopher Nolan", "job": "Screenplay", "department": "Writing"},
-                {"name": "Hans Zimmer", "job": "Original Music Composer", "department": "Sound"},
-                {"name": "Wally Pfister", "job": "Director of Photography", "department": "Camera"},
-                {"name": "Lee Smith", "job": "Editor", "department": "Editing"},
-                {"name": "Nobody Important", "job": "Best Boy", "department": "Lighting"},
-            ],
-        },
+        "credits": tmdb_credits(tmdb_id),
+    }
+
+
+def tmdb_credits(tmdb_id=27205):
+    """A credits object shaped like TMDB's.
+
+    The same people recur across every film built from it, as real
+    collaborators do, but credit ids are unique to the film, as on TMDB.
+    """
+    def crew(person_id, name, job, department, gender=2):
+        return {
+            "id": person_id, "credit_id": f"{tmdb_id}-{person_id}-{job}", "name": name,
+            "original_name": name, "gender": gender, "known_for_department": department,
+            "popularity": 1.0, "profile_path": f"/{person_id}.jpg",
+            "job": job, "department": department,
+        }
+
+    return {
+        "cast": [
+            {
+                "id": 1000 + i, "credit_id": f"{tmdb_id}-cast-{i}", "name": f"Actor {i}",
+                "original_name": f"Actor {i}", "gender": (1, 2, 0)[i % 3],
+                "known_for_department": "Acting", "popularity": 2.0, "profile_path": None,
+                "character": f"Role {i}", "order": i - 1, "cast_id": i,
+            }
+            for i in range(1, 16)
+        ],
+        "crew": [
+            crew(525, "Christopher Nolan", "Director", "Directing"),
+            # Credited three times -- one person, three credits, named once.
+            crew(525, "Christopher Nolan", "Writer", "Writing"),
+            crew(525, "Christopher Nolan", "Screenplay", "Writing"),
+            crew(601, "Dialogue Writer", "Dialogue", "Writing", gender=0),
+            crew(947, "Hans Zimmer", "Original Music Composer", "Sound"),
+            crew(948, "A Lyricist", "Lyricist", "Writing", gender=1),
+            crew(949, "A Singer", "Playback Singer", "Sound", gender=1),
+            crew(3032, "Wally Pfister", "Director of Photography", "Camera"),
+            crew(3033, "Lee Smith", "Editor", "Editing"),
+            crew(556, "Emma Thomas", "Producer", "Production", gender=1),
+            crew(700, "Nobody Important", "Best Boy", "Lighting"),
+            crew(701, "An Art Director", "Art Direction", "Art"),
+            crew(702, "A Costumer", "Costume Designer", "Costume & Make-Up"),
+        ],
     }
 
 
@@ -92,7 +122,12 @@ def test_multi_value_fields_become_lists_not_pipe_joined_strings():
 
 def test_a_person_credited_twice_appears_once():
     row = as_film_row(27205, tmdb_response())
-    assert row["writers"] == ["Christopher Nolan"]
+    assert row["writers"].count("Christopher Nolan") == 1
+
+
+def test_writers_include_dialogue_and_novel_credits():
+    row = as_film_row(27205, tmdb_response())
+    assert row["writers"] == ["Christopher Nolan", "Dialogue Writer"]
 
 
 def test_each_crew_role_is_picked_out():
@@ -107,11 +142,12 @@ def test_uninteresting_crew_are_left_out():
     everyone = sum((row[k] or [] for k in ("directors", "writers", "composers",
                                            "cinematographers", "editors")), [])
     assert "Nobody Important" not in everyone
+    assert "An Art Director" not in everyone
 
 
 def test_cast_is_capped_at_the_leading_names():
     row = as_film_row(27205, tmdb_response())
-    assert len(row["cast_members"]) == enrich.CAST_LIMIT
+    assert len(row["cast_members"]) == credits.CAST_LIMIT
     assert row["cast_members"][0] == "Actor 1"
 
 
@@ -139,9 +175,10 @@ def test_a_film_with_no_title_still_gets_one():
     assert as_film_row(99, {})["title"] == "TMDB 99"
 
 
-def test_crew_helpers_tolerate_missing_sections():
-    assert crew_named({}, jobs={"Director"}) is None
-    assert leading_cast({}) is None
+def test_the_row_carries_its_credits_for_storage():
+    row = as_film_row(27205, tmdb_response())
+    assert isinstance(row["film_credits"], credits.FilmCredits)
+    assert row["film_credits"].names("producer") == ["Emma Thomas"]
 
 
 # ------------------------------------------------------------------ merging
@@ -278,3 +315,125 @@ def test_the_watchlist_picker_finally_has_something_to_pick(resolved):
     assert pick.tmdb_id == 393  # the only unwatched watchlist film
     assert isinstance(pick.genres, list)
     assert pick.runtime == 148
+
+
+# ------------------------------------------------------- people and credits
+#
+# Each film's kept credits: 10 cast plus 10 crew credits (Nolan three times,
+# then dialogue, composer, lyricist, singer, cinematographer, editor,
+# producer). The same 18 people recur in every film, as collaborators do.
+
+CREDITS_PER_FILM = 20
+PEOPLE = 18
+
+
+def test_enrich_stores_each_person_once_and_every_credit(resolved):
+    enrich_all(client=FakeClient())
+
+    assert db.query("SELECT count(*) AS n FROM film_credits")[0]["n"] == 4 * CREDITS_PER_FILM
+    assert db.query("SELECT count(*) AS n FROM people")[0]["n"] == PEOPLE
+    per_film = db.query("SELECT tmdb_id, count(*) AS n FROM film_credits GROUP BY 1")
+    assert {row["n"] for row in per_film} == {CREDITS_PER_FILM}
+    assert db.query("SELECT * FROM integrity_orphans") == []
+
+
+def test_credits_are_filed_under_plain_roles(resolved):
+    enrich_all(client=FakeClient())
+    roles = {
+        row["role"]: row["n"]
+        for row in db.query(
+            "SELECT role, count(*) AS n FROM film_credits WHERE tmdb_id = 694 GROUP BY 1"
+        )
+    }
+    assert roles == {
+        "actor": 10, "director": 1, "writer": 3, "composer": 1, "lyricist": 1,
+        "playback singer": 1, "cinematographer": 1, "editor": 1, "producer": 1,
+    }
+
+
+def test_a_question_about_people_is_answerable(resolved):
+    enrich_all(client=FakeClient())
+    women = db.query(
+        """
+        SELECT DISTINCT p.name
+        FROM film_credits c JOIN people p USING (person_id)
+        WHERE c.role IN ('producer', 'lyricist', 'playback singer') AND p.gender = 'female'
+        ORDER BY 1
+        """
+    )
+    assert [row["name"] for row in women] == ["A Lyricist", "A Singer", "Emma Thomas"]
+    unknown = db.query("SELECT gender FROM people WHERE person_id = 601")[0]
+    assert unknown["gender"] is None
+
+
+def test_the_films_name_lists_agree_with_the_credits(resolved):
+    enrich_all(client=FakeClient())
+    film = db.query("SELECT directors, writers, cast_members FROM films WHERE tmdb_id = 694")[0]
+    from_credits = db.query(
+        """
+        SELECT list(DISTINCT p.name ORDER BY p.name) AS names
+        FROM film_credits c JOIN people p USING (person_id)
+        WHERE c.tmdb_id = 694 AND c.role = 'writer'
+        """
+    )[0]["names"]
+    assert sorted(film["writers"]) == from_credits
+    assert film["directors"] == ["Christopher Nolan"]
+    assert len(film["cast_members"]) == 10
+
+
+def test_every_stored_film_is_recorded_as_having_its_credits(resolved):
+    enrich_all(client=FakeClient())
+    assert db.query("SELECT count(*) AS n FROM film_credit_fetches")[0]["n"] == 4
+
+
+def test_a_film_with_no_kept_credits_is_still_recorded(empty_conn):
+    store_films([as_film_row(5, {"title": "Silent", "credits": {"cast": [], "crew": []}})])
+    assert db.query("SELECT tmdb_id FROM film_credit_fetches") == [{"tmdb_id": 5}]
+
+
+def test_refetching_a_film_replaces_its_credits(empty_conn):
+    store_films([as_film_row(27205, tmdb_response())])
+
+    changed = tmdb_response()
+    changed["credits"]["crew"] = [
+        c for c in changed["credits"]["crew"] if c["job"] != "Producer"
+    ]
+    store_films([as_film_row(27205, changed)])
+
+    roles = [row["role"] for row in db.query("SELECT role FROM film_credits")]
+    assert "producer" not in roles
+    assert len(roles) == CREDITS_PER_FILM - 1
+
+
+def test_refetching_never_wipes_what_credits_do_not_carry(empty_conn):
+    store_films([as_film_row(27205, tmdb_response())])
+    empty_conn.execute(
+        "UPDATE people SET birthday = DATE '1970-07-30', place_of_birth = 'London', "
+        "details_fetched_at = now() WHERE person_id = 525"
+    )
+
+    # A later response that no longer knows Nolan's gender.
+    forgetful = tmdb_response()
+    for member in forgetful["credits"]["crew"]:
+        if member["id"] == 525:
+            member["gender"] = 0
+    store_films([as_film_row(27205, forgetful)])
+
+    nolan = db.query("SELECT * FROM people WHERE person_id = 525")[0]
+    assert str(nolan["birthday"]) == "1970-07-30"
+    assert nolan["place_of_birth"] == "London"
+    assert nolan["details_fetched_at"] is not None
+    assert nolan["gender"] == "male"
+
+
+def test_a_film_and_its_credits_are_stored_together_or_not_at_all(empty_conn, monkeypatch):
+    from projectsummer.core import enrich
+
+    def fail(conn, films):
+        raise RuntimeError("credits could not be written")
+
+    monkeypatch.setattr(enrich, "store_credits", fail)
+    with pytest.raises(RuntimeError):
+        store_films([as_film_row(27205, tmdb_response())])
+
+    assert db.query("SELECT count(*) AS n FROM films")[0]["n"] == 0

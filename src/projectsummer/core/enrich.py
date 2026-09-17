@@ -4,7 +4,8 @@ Resolution (`resolve.py`) turns Letterboxd URIs into TMDB ids. This module
 takes it from there, and never touches Letterboxd:
 
 1. Fetch each film from TMDB -- one request per film, with credits and
-   keywords appended, so a film costs a single round trip.
+   keywords appended, so a film costs a single round trip. The film, its kept
+   credits and the people they name are stored together (see `credits.py`).
 2. Overlay your own data: watched, rating, watchlist, likes.
 3. Rebuild `diary_entries`, one row per viewing.
 
@@ -15,14 +16,19 @@ splitting anything.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 import requests
 
+import duckdb
+
+from projectsummer.core import credits as film_credits
 from projectsummer.core import db, progress
-from projectsummer.core.results import Result
+from projectsummer.core.credits import FilmCredits
 from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.results import Result
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
@@ -34,10 +40,6 @@ APPEND_TO_RESPONSE = "credits,keywords,external_ids"
 RATE_LIMIT_DELAY = 0.05
 
 TIMEOUT = 20
-
-#: How many cast members to keep. The full list runs to hundreds for big
-#: productions, and the tail is bit parts nobody queries by.
-CAST_LIMIT = 10
 
 
 class MissingTokenError(LetterboxdError):
@@ -94,8 +96,12 @@ class TMDBClient:
 # ------------------------------------------------------------- extraction
 
 def as_film_row(tmdb_id: int, data: dict[str, Any]) -> dict[str, Any]:
-    """Flatten a TMDB response into the shape of a `films` row."""
-    credits = data.get("credits") or {}
+    """Flatten a TMDB response into the shape of a `films` row.
+
+    The row also carries the film's kept credits under ``film_credits``, which
+    `store_films` writes alongside it.
+    """
+    credits = film_credits.extract(data.get("credits"))
     return {
         "tmdb_id": tmdb_id,
         "imdb_id": (data.get("external_ids") or {}).get("imdb_id"),
@@ -106,12 +112,12 @@ def as_film_row(tmdb_id: int, data: dict[str, Any]) -> dict[str, Any]:
         "overview": data.get("overview") or None,
         "tagline": data.get("tagline") or None,
         "poster_path": data.get("poster_path"),
-        "directors": crew_named(credits, jobs={"Director"}),
-        "cast_members": leading_cast(credits),
-        "writers": crew_named(credits, jobs={"Writer", "Screenplay", "Story"}),
-        "composers": crew_named(credits, jobs={"Original Music Composer", "Music"}),
-        "cinematographers": crew_named(credits, jobs={"Director of Photography"}),
-        "editors": crew_named(credits, jobs={"Editor"}),
+        "directors": credits.names("director"),
+        "cast_members": credits.names(film_credits.ACTOR),
+        "writers": credits.names("writer"),
+        "composers": credits.names("composer"),
+        "cinematographers": credits.names("cinematographer"),
+        "editors": credits.names("editor"),
         "genres": names_of(data.get("genres")),
         "keywords": names_of((data.get("keywords") or {}).get("keywords")),
         "original_language": data.get("original_language"),
@@ -124,6 +130,7 @@ def as_film_row(tmdb_id: int, data: dict[str, Any]) -> dict[str, Any]:
         "tmdb_rating": data.get("vote_average"),
         "tmdb_vote_count": data.get("vote_count"),
         "tmdb_popularity": data.get("popularity"),
+        "film_credits": credits,
     }
 
 
@@ -133,25 +140,6 @@ def names_of(entries: list[dict[str, Any]] | None, key: str = "name") -> list[st
         return None
     found = [entry[key] for entry in entries if entry.get(key)]
     return found or None
-
-
-def crew_named(credits: dict[str, Any], jobs: set[str]) -> list[str] | None:
-    """Crew holding any of `jobs`, in credit order and without repeats.
-
-    A person can be credited twice (Writer and Screenplay, say), and the same
-    job can be shared, so order is preserved but duplicates are dropped.
-    """
-    seen: dict[str, None] = {}
-    for member in credits.get("crew") or []:
-        if member.get("job") in jobs and member.get("name"):
-            seen.setdefault(member["name"], None)
-    return list(seen) or None
-
-
-def leading_cast(credits: dict[str, Any]) -> list[str] | None:
-    cast = credits.get("cast") or []
-    names = [member["name"] for member in cast[:CAST_LIMIT] if member.get("name")]
-    return names or None
 
 
 # ----------------------------------------------------------------- storage
@@ -166,32 +154,178 @@ _FILM_COLUMNS = (
 )
 
 
+#: JSON shapes for bulk loading. Handing DuckDB one JSON string and letting it
+#: build the rows is orders of magnitude faster than binding Python values:
+#: a thousand credits take milliseconds this way and half a minute through
+#: executemany, which converts and upserts one row at a time.
+_FILMS_JSON = (
+    '[{"tmdb_id": "BIGINT", "imdb_id": "VARCHAR", "title": "VARCHAR", '
+    '"original_title": "VARCHAR", "release_date": "VARCHAR", "runtime": "INTEGER", '
+    '"overview": "VARCHAR", "tagline": "VARCHAR", "poster_path": "VARCHAR", '
+    '"directors": ["VARCHAR"], "cast_members": ["VARCHAR"], "writers": ["VARCHAR"], '
+    '"composers": ["VARCHAR"], "cinematographers": ["VARCHAR"], "editors": ["VARCHAR"], '
+    '"genres": ["VARCHAR"], "keywords": ["VARCHAR"], "original_language": "VARCHAR", '
+    '"spoken_languages": ["VARCHAR"], "production_companies": ["VARCHAR"], '
+    '"production_countries": ["VARCHAR"], "budget": "BIGINT", "revenue": "BIGINT", '
+    '"status": "VARCHAR", "tmdb_rating": "DOUBLE", "tmdb_vote_count": "INTEGER", '
+    '"tmdb_popularity": "DOUBLE"}]'
+)
+
 def store_films(rows: list[dict[str, Any]]) -> None:
-    """Insert or refresh film metadata, leaving user state untouched."""
+    """Insert or refresh films, with their credits and people, leaving user state untouched.
+
+    One transaction, so a film is never stored without its credits or the
+    other way round.
+    """
     if not rows:
         return
 
+    conn = db.get_connection()
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        _store_film_rows(conn, rows)
+        store_credits(
+            conn,
+            [(row["tmdb_id"], row["film_credits"]) for row in rows if "film_credits" in row],
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        try:
+            conn.execute("ROLLBACK")
+        except duckdb.Error:
+            pass  # already aborted by DuckDB; the original error matters more
+        raise
+
+
+def _store_film_rows(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
     columns = ", ".join(_FILM_COLUMNS)
-    placeholders = ", ".join(
-        "try_cast(? AS DATE)" if name == "release_date" else "?"
+    selected = ", ".join(
+        "try_cast(f.release_date AS DATE)" if name == "release_date" else f"f.{name}"
         for name in _FILM_COLUMNS
     )
     updates = ", ".join(
         f"{name} = excluded.{name}" for name in _FILM_COLUMNS if name != "tmdb_id"
     )
 
-    db.get_connection().executemany(
+    conn.execute(
         f"""
         INSERT INTO films ({columns}, year, enriched_at, updated_at)
-        VALUES ({placeholders}, NULL, now(), now())
+        SELECT {selected}, NULL, now(), now()
+        FROM (SELECT unnest(json_transform(?, '{_FILMS_JSON}')) AS f)
         ON CONFLICT (tmdb_id) DO UPDATE SET
             {updates}, enriched_at = now(), updated_at = now()
         """,
-        [tuple(row.get(name) for name in _FILM_COLUMNS) for row in rows],
+        [json.dumps([{name: row.get(name) for name in _FILM_COLUMNS} for row in rows])],
     )
     # Derived from release_date rather than stored twice and left to disagree.
-    db.get_connection().execute(
+    conn.execute(
         "UPDATE films SET year = year(release_date) WHERE release_date IS NOT NULL"
+    )
+
+
+_PEOPLE_JSON = (
+    '[{"person_id": "BIGINT", "name": "VARCHAR", "original_name": "VARCHAR", '
+    '"gender": "VARCHAR", "known_for_department": "VARCHAR", '
+    '"popularity": "DOUBLE", "profile_path": "VARCHAR"}]'
+)
+_CREDITS_JSON = (
+    '[{"credit_id": "VARCHAR", "tmdb_id": "BIGINT", "person_id": "BIGINT", '
+    '"role": "VARCHAR", "job": "VARCHAR", "department": "VARCHAR", '
+    '"character": "VARCHAR", "billing_order": "INTEGER"}]'
+)
+
+
+def store_credits(
+    conn: duckdb.DuckDBPyConnection,
+    films: list[tuple[int, FilmCredits]],
+) -> None:
+    """Replace each film's credits, and add or refresh the people they name.
+
+    A film's credits are replaced wholesale, so a credit TMDB has since
+    corrected or removed does not linger. A person is refreshed only in what
+    credits say about them -- never their birthday or birthplace, which come
+    from a separate call -- and a credit that does not know their gender does
+    not erase one already known.
+    """
+    if not films:
+        return
+
+    ids = [tmdb_id for tmdb_id, _ in films]
+    conn.execute(
+        "DELETE FROM film_credits WHERE tmdb_id IN (SELECT unnest(?::BIGINT[]))", [ids]
+    )
+
+    people = {
+        person.person_id: {
+            "person_id": person.person_id,
+            "name": person.name,
+            "original_name": person.original_name,
+            "gender": person.gender,
+            "known_for_department": person.known_for_department,
+            "popularity": person.popularity,
+            "profile_path": person.profile_path,
+        }
+        for _, credits in films
+        for person in credits.people
+    }
+    if people:
+        conn.execute(
+            f"""
+            INSERT INTO people (person_id, name, original_name, gender,
+                                known_for_department, popularity, profile_path)
+            SELECT p.person_id, p.name, p.original_name, p.gender,
+                   p.known_for_department, p.popularity, p.profile_path
+            FROM (SELECT unnest(json_transform(?, '{_PEOPLE_JSON}')) AS p)
+            ON CONFLICT (person_id) DO UPDATE SET
+                name = excluded.name,
+                original_name = coalesce(excluded.original_name, people.original_name),
+                gender = coalesce(excluded.gender, people.gender),
+                known_for_department = coalesce(excluded.known_for_department,
+                                                people.known_for_department),
+                popularity = coalesce(excluded.popularity, people.popularity),
+                profile_path = coalesce(excluded.profile_path, people.profile_path)
+            """,
+            [json.dumps(list(people.values()))],
+        )
+
+    rows = [
+        {
+            "credit_id": credit.credit_id,
+            "tmdb_id": tmdb_id,
+            "person_id": credit.person_id,
+            "role": credit.role,
+            "job": credit.job,
+            "department": credit.department,
+            "character": credit.character,
+            "billing_order": credit.billing_order,
+        }
+        for tmdb_id, credits in films
+        for credit in credits.storable_credits()
+    ]
+    if rows:
+        conn.execute(
+            f"""
+            INSERT INTO film_credits (credit_id, tmdb_id, person_id, role, job,
+                                      department, character, billing_order)
+            SELECT c.credit_id, c.tmdb_id, c.person_id, c.role, c.job,
+                   c.department, c.character, c.billing_order
+            FROM (SELECT unnest(json_transform(?, '{_CREDITS_JSON}')) AS c)
+            ON CONFLICT (credit_id) DO UPDATE SET
+                tmdb_id = excluded.tmdb_id, person_id = excluded.person_id,
+                role = excluded.role, job = excluded.job,
+                department = excluded.department, character = excluded.character,
+                billing_order = excluded.billing_order
+            """,
+            [json.dumps(rows)],
+        )
+
+    conn.execute(
+        """
+        INSERT INTO film_credit_fetches (tmdb_id, fetched_at)
+        SELECT unnest(?::BIGINT[]), now()
+        ON CONFLICT (tmdb_id) DO UPDATE SET fetched_at = now()
+        """,
+        [ids],
     )
 
 
