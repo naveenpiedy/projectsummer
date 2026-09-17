@@ -5,9 +5,9 @@ LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
 > **Status: early development.** The pipeline works end to end — import,
-> resolve, enrich, sync, build lists — and so does the MCP server, all covered
-> by ~400 tests. Most of the analysis plugins are still to come. See
-> [Roadmap](#roadmap).
+> resolve, enrich with cast, crew and people, sync, build lists — and so does
+> the MCP server, all covered by ~490 tests. Most of the analysis plugins are
+> still to come. See [Roadmap](#roadmap).
 
 ## Install
 
@@ -228,16 +228,24 @@ The assistant gets these tools:
 | `set_list_ranked` | Marks a list as ranked |
 | `list_builder` | Writes an importable list into the output folder |
 
-The first six only read. Importing, resolving and enriching stay with the CLI:
-they run for minutes, and are yours to start.
+The first five only read. Importing, resolving and enriching stay with the
+CLI: they run for minutes, and are yours to start.
+
+Questions about people — "which women directors do I rate highest?" — work
+through the same two tools: `describe_schema` points the assistant to the
+`people` and `film_credits` tables.
 
 What an assistant can do is enforced by the server, not left to the model:
 
 - **Only these tools exist.** Anything else is never registered, so no prompt
   can reach it.
 - **Reading tools cannot write.** They run on a database connection DuckDB
-  itself keeps read-only, with no access to files outside the library —
-  whatever SQL they are given.
+  itself keeps read-only, whatever SQL they are given.
+- **No tool can reach your files through the database.** Every connection the
+  server opens, writing ones included, has DuckDB's file access switched off.
+  That matters beyond `query`: `list_builder` takes SQL too, and a query that
+  reads a file could otherwise leak it, `.env` and all, through an error
+  message.
 - **Files go only into the output folder** (`output` in the per-user data
   directory). An absolute path, or one that climbs out, is refused.
 - **Your own commands are never locked out.** The database is opened for each
@@ -371,9 +379,13 @@ uv sync
 uv run pytest
 ```
 
+`uv sync` includes the development dependencies, FastMCP among them, so the
+MCP server's tests run too.
+
 Tests never touch the network: HTTP is faked at the session boundary, so the
-awkward cases — a redirect to a diary entry, a page with no ids, a timeout, an
-interruption mid-run — are exercised deliberately rather than waited for.
+awkward cases — a redirect to a diary entry, a page with no ids, a timeout,
+TMDB rate limiting, an interruption mid-run — are exercised deliberately rather
+than waited for.
 
 ## Roadmap
 
@@ -386,6 +398,7 @@ interruption mid-run — are exercised deliberately rather than waited for.
 - [x] RSS polling to keep the library current
 - [x] List builder: filters or SQL to a Letterboxd-importable list
 - [x] MCP server, generated from the same registry
+- [x] People and credits: gender, birthdays, roles across cast and crew
 - [ ] Plugins: trends, taste, list overlap, ranking
 
 ## Attribution and affiliation
