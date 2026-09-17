@@ -177,6 +177,8 @@ def _check_size(films: int) -> None:
 
 def _play(tournament: Tournament[int], films: dict[int, dict[str, Any]]) -> bool:
     """Ask every matchup in turn. Returns False if the person stopped."""
+    # Ranking one director's films, naming them on every matchup is noise.
+    show_directors = len({tuple(film["directors"] or ()) for film in films.values()}) > 1
     shown_round = None
     while (matchup := tournament.next()) is not None:
         if matchup.round_name != shown_round:
@@ -191,8 +193,8 @@ def _play(tournament: Tournament[int], films: dict[int, dict[str, Any]]) -> bool
         answer = asking.choose(
             f"Matchup {matchup.number}, {to_go}",
             {
-                "1": _label(films[matchup.left]),
-                "2": _label(films[matchup.right]),
+                "1": _label(films[matchup.left], show_directors),
+                "2": _label(films[matchup.right], show_directors),
                 "u": "undo the last choice",
                 "q": "stop without saving",
             },
@@ -224,11 +226,11 @@ def _mention_upset(winner: dict[str, Any], loser: dict[str, Any]) -> None:
         )
 
 
-def _label(film: dict[str, Any]) -> str:
+def _label(film: dict[str, Any], show_directors: bool) -> str:
     label = film["title"]
     if film["year"] is not None:
         label += f" ({film['year']})"
-    if film["directors"]:
+    if show_directors and film["directors"]:
         label += f", {', '.join(film['directors'])}"
     return label
 

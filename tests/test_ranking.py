@@ -150,6 +150,32 @@ def test_a_finished_ranking_can_be_saved_in_order(library, tmp_path):
     assert titles == TASTE
 
 
+class Recorder(Judge):
+    """A judge that also keeps every option it was shown."""
+
+    def __init__(self):
+        super().__init__()
+        self.labels: list[str] = []
+
+    def choose(self, question, options):
+        self.labels += [options["1"], options["2"]]
+        return super().choose(question, options)
+
+
+def test_matchups_name_directors_when_they_differ(library):
+    judge = Recorder()
+    _run(judge, from_list="faves", seed=1)
+    assert any(label.endswith(", Ridley Scott") for label in judge.labels)
+
+
+def test_matchups_leave_out_a_director_every_film_shares(library):
+    library.execute("UPDATE films SET directors = ['Ridley Scott']")
+    judge = Recorder()
+    _run(judge, from_list="faves", seed=1)
+    assert judge.labels
+    assert not any("Ridley Scott" in label for label in judge.labels)
+
+
 # ------------------------------------------------------------------ bracket
 
 def test_a_bracket_crowns_a_champion_and_groups_the_rest(library):
@@ -160,7 +186,7 @@ def test_a_bracket_crowns_a_champion_and_groups_the_rest(library):
     assert result.ranking[0].place == 1
     assert result.choices == 5
     assert judge.told[-1] == "Champion: Alien (1979)"
-    # Six entrants: a bracket of eight with two byes, so places run 1, 2, 3.
+    # Six entrants: a bracket of eight with two byes, so places 1, 2, 3 and 5.
     assert sorted({film.place for film in result.ranking}) == [1, 2, 3, 5]
 
 
