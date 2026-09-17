@@ -42,8 +42,8 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 #: Everything needed for one film in a single request.
 APPEND_TO_RESPONSE = "credits,keywords,external_ids"
 
-#: TMDB allows ~50 requests/second. 20/s leaves generous headroom and still
-#: gets through a thousand-film library in about a minute.
+#: A short pause after each request, per worker. TMDB allows ~50 requests a
+#: second; with WORKERS running at once the real rate settles around 13.
 RATE_LIMIT_DELAY = 0.05
 
 #: Requests sent to TMDB at once. A request takes about half a second, almost
@@ -738,7 +738,8 @@ class EnrichResult(Result):
     unmatched: int
     """Imported diary rows with no enriched film to attach to."""
     still_pending: int
-    """Resolved films still waiting to be fetched."""
+    """Films still waiting to be fetched: never fetched, or without their cast
+    and crew."""
     people_fetched: int
     """People whose birthday, birthplace and other details were fetched."""
     people_not_on_tmdb: int

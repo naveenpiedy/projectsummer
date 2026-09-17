@@ -12,7 +12,10 @@ of it is enforced here rather than suggested to the model:
   prompt, client or `call_tool` can reach them. `LETTERBOXD_MCP_READ_ONLY`
   (or `--read-only`) leaves out every write plugin as well.
 * **A read plugin runs on a read-only session**, where DuckDB refuses any
-  write and any filesystem access, whatever SQL or code runs inside it.
+  write, whatever SQL or code runs inside it.
+* **No session can reach the filesystem through DuckDB**, writing ones
+  included. list_builder takes SQL too, and a query that reads a file can
+  leak it through an error message.
 * **The database is opened per call and closed after**, so the server never
   locks the user's own `summer` commands out while their chat client is open.
 * **Files are written only inside the output folder.** A path parameter is
@@ -66,6 +69,8 @@ def instructions(output_dir: Path) -> str:
         "before filtering on it, because a wrong spelling silently matches "
         "nothing. query runs one SELECT; ask it for the answer (a count, an "
         "average, a top ten) rather than fetching many rows to work it out.\n\n"
+        "people and film_credits hold who made each film -- gender, birthday, "
+        "birthplace -- where a missing value means unknown.\n\n"
         "overview says whether the library is imported and enriched yet. Tools "
         "not marked read-only change something: sync fetches recent diary "
         "entries from Letterboxd, set_list_ranked marks a list as ranked, and "
@@ -116,7 +121,7 @@ def as_tool(item: Plugin, database: Path, output_dir: Path) -> Tool:
                     f"No library at {database} yet. Import a Letterboxd export "
                     f"first, with: summer ingest <your-export.zip>"
                 )
-            with db.session(database, read_only=read_only):
+            with db.session(database, read_only=read_only, external_access=False):
                 return item.func(**arguments)
         except LetterboxdError as error:
             # Written to be read. Everything else is masked by the server.
@@ -244,7 +249,7 @@ def prepare_database(database: Path) -> str | None:
             f"imported with: summer ingest <your-export.zip>"
         )
     try:
-        with db.session(database):
+        with db.session(database, external_access=False):
             pass
     except DatabaseBusyError:
         return f"{database} is in use, so its schema was not refreshed; serving it as it is."

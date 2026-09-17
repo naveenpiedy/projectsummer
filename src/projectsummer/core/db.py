@@ -72,6 +72,12 @@ READ_ONLY_CONFIG: dict[str, Any] = {
     "lock_configuration": True,
 }
 
+#: The same restriction for a connection that may write to the database. Used
+#: wherever SQL from outside can reach a writable connection -- list_builder's
+#: query over MCP, say -- because reading a file is enough to leak it: DuckDB
+#: quotes a value it cannot convert in its error message.
+NO_EXTERNAL_ACCESS_CONFIG: dict[str, Any] = READ_ONLY_CONFIG
+
 _lock = threading.RLock()
 _connection: duckdb.DuckDBPyConnection | None = None
 _connection_path: Path | None = None
@@ -216,6 +222,7 @@ def session(
     path: str | Path | None = None,
     *,
     read_only: bool = False,
+    external_access: bool = True,
 ) -> Iterator[duckdb.DuckDBPyConnection]:
     """Open a connection for one unit of work, and close it afterwards.
 
@@ -234,7 +241,10 @@ def session(
 
     Args:
         path: Database file to open. Defaults to :func:`config.db_path`.
-        read_only: Open without any ability to write.
+        read_only: Open without any ability to write. Implies no external
+            access.
+        external_access: Allow DuckDB to read and write files outside the
+            database. Turn it off wherever the SQL run is not the user's own.
 
     Yields:
         The session's connection.
@@ -268,7 +278,7 @@ def session(
                     f"close it before opening a session on the same file."
                 )
 
-        conn = _open(target, read_only=read_only)
+        conn = _open(target, read_only=read_only, external_access=external_access)
         token = _session.set(_Session(conn, target))
         try:
             yield conn
@@ -277,7 +287,9 @@ def session(
             conn.close()
 
 
-def _open(target: Path, *, read_only: bool) -> duckdb.DuckDBPyConnection:
+def _open(
+    target: Path, *, read_only: bool, external_access: bool = True
+) -> duckdb.DuckDBPyConnection:
     """Connect to `target` and make sure its schema is usable.
 
     A read-write connection applies the schema. A read-only one cannot, so it
@@ -297,7 +309,11 @@ def _open(target: Path, *, read_only: bool) -> duckdb.DuckDBPyConnection:
         conn = duckdb.connect(
             str(target),
             read_only=read_only,
-            config=READ_ONLY_CONFIG if read_only else {},
+            config=(
+                READ_ONLY_CONFIG if read_only
+                else {} if external_access
+                else NO_EXTERNAL_ACCESS_CONFIG
+            ),
         )
     except duckdb.IOException as error:
         if in_memory or not target.exists():

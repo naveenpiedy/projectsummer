@@ -102,3 +102,15 @@ def test_roles_lists_every_role_once_actor_first():
     assert roles[0] == ACTOR
     assert len(roles) == len(set(roles))
     assert set(roles) == {ACTOR, *credits.JOB_ROLES.values()}
+
+
+def test_a_cast_member_with_no_billing_order_does_not_break_sorting():
+    kept = extract({"cast": [
+        {"id": 1, "credit_id": "a", "name": "Second", "order": 1},
+        {"id": 2, "credit_id": "b", "name": "Unordered", "order": None},
+        {"id": 3, "credit_id": "c", "name": "First", "order": 0},
+    ]})
+    # No crash; the member without an order keeps its place in the list.
+    names = kept.names(ACTOR)
+    assert names[0] == "First"
+    assert sorted(names) == ["First", "Second", "Unordered"]

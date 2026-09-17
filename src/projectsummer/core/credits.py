@@ -122,7 +122,12 @@ def extract(credits: dict[str, Any] | None) -> FilmCredits:
     cast = [member for member in credits.get("cast") or [] if member.get("name")]
     # TMDB returns cast in billing order already; sort anyway, keeping the
     # given order for entries without one.
-    cast = sorted(enumerate(cast), key=lambda pair: (pair[1].get("order", pair[0]), pair[0]))
+    def billing(pair: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+        index, member = pair
+        order = member.get("order")
+        return (order if isinstance(order, int) else index, index)
+
+    cast = sorted(enumerate(cast), key=billing)
     for _, member in cast[:CAST_LIMIT]:
         kept.append(_credit(member, ACTOR, "Actor", "Acting"))
         _remember(people, member)

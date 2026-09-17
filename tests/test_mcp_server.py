@@ -325,3 +325,20 @@ def _registered(func, **options):
     finally:
         registry.clear()
         registry._REGISTRY.update(saved)
+
+
+def test_list_builder_sql_cannot_reach_files_either(library, output_dir, tmp_path):
+    """list_builder writes, so it runs on a writable session -- but it takes
+    SQL, and DuckDB quotes a value it cannot convert in its error message. A
+    query casting a file's contents would hand them to the client. Found in
+    review with a stand-in for a real .env."""
+    secret = tmp_path / "fake.env"
+    secret.write_text("TMDB_API_KEY=pretend-secret-123\n", encoding="utf-8")
+
+    result = run(_call(
+        serve(library, output_dir), "list_builder",
+        {"output": "x.csv", "sql": f"SELECT CAST(content AS BIGINT) AS tmdb_id "
+                                   f"FROM read_text('{secret.as_posix()}')"},
+    ))
+    assert result.is_error
+    assert "pretend-secret-123" not in result.content[0].text

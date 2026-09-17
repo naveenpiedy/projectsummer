@@ -224,3 +224,17 @@ def test_a_read_only_session_cannot_switch_its_restrictions_off(library):
     with db.session(library, read_only=True):
         with pytest.raises(duckdb.Error, match="locked"):
             db.query("SET enable_external_access = true")
+
+
+def test_a_writable_session_can_refuse_external_access(library, tmp_path):
+    secret = tmp_path / "secret.csv"
+    secret.write_text("token\nabc123\n", encoding="utf-8")
+    target = tmp_path / "leak.csv"
+
+    with db.session(library, external_access=False):
+        db.query("UPDATE films SET title = 'Still writable'")
+        with pytest.raises(duckdb.Error):
+            db.query(f"SELECT * FROM read_csv('{secret.as_posix()}')")
+        with pytest.raises(duckdb.Error):
+            db.query(f"COPY films TO '{target.as_posix()}'")
+    assert not target.exists()
