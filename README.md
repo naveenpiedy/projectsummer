@@ -73,7 +73,16 @@ minutes, with requests made eight at a time. It happens once — later runs
 fetch only people they have not seen — and it comes last and saves as it
 goes, so interrupting it is safe and running `enrich` again carries on.
 
-That is the setup done. Now you can ask it things:
+That is the setup done. To do all three in one go instead:
+
+```console
+$ summer setup letterboxd-you-2026-09-16.zip
+```
+
+It checks for a TMDB token before starting, and like each step it resumes if
+interrupted: run it again with the same export.
+
+Now you can ask it things:
 
 ```console
 $ summer random-watchlist-pick --genre horror
@@ -177,7 +186,9 @@ $ summer query "SELECT year(watched_date) AS year, count(*) AS films
 ```
 
 `query` runs a single `SELECT` only, returns at most 100 rows by default
-(`--max-rows` up to 1000), and stops anything running past 30 seconds.
+(`--max-rows` up to 1000) and about 20,000 characters of them, and stops
+anything running past 30 seconds. The size limit keeps a wide `SELECT *` from
+flooding an assistant's context; select the columns you need.
 
 `ui` uses DuckDB's built-in `ui` extension, downloaded once on first use. It
 serves until you press Ctrl+C. Its column explorer shows a histogram and

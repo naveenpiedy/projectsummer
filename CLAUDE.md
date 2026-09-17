@@ -131,37 +131,20 @@ Where the last session (2026-09-17) stopped. Nothing here is decided unless it
 says so: raise the item and agree the approach before building. The work so
 far goes step by step, with a plan approved first and a pause after each step.
 
-1. **Cap `query` results by size, not just rows.** `max_rows` bounds row count
-   only. Measured on a real library: `SELECT * FROM films` at 100 rows is
-   ~52k tokens, `SELECT * FROM people` ~11k, while a well-formed aggregate is
-   ~200. Proposed: stop adding rows past ~20k characters, set `truncated`, and
-   say to select only needed columns; optionally shorten long text cells
-   (overview, review). The model's habits decide how often this bites, which
-   is the argument for enforcing it in the server. Optional companion: a local
-   log of tool calls and result sizes to tune the cap from real use.
-2. **Point `films`' name-list columns at `film_credits`.** `writers` already
-   says to use `film_credits` and `people` for anything about a person;
-   `directors`, `cast_members`, `composers`, `cinematographers` and `editors`
-   don't. An agent joining those name strings to `people.name` merges
-   namesakes (a real library has three different "Suraj"s). A description
-   change only: it alters schema.sql's fingerprint, so it is re-applied once
-   and checkpointed -- no version bump.
-3. **File the DuckDB bug.** Draft and verified reproduction in
+1. **File the DuckDB bug.** Draft and verified reproduction in
    `docs/duckdb-wal-comment-on-column-replay.md`. Posting is public: the user
    posts it.
-4. **Stop re-requesting films TMDB never had.** A film resolved but never
+2. **Stop re-requesting films TMDB never had.** A film resolved but never
    stored because TMDB answered 404 is fetched again on every `enrich` and
    counted in `still_pending`. Stored films TMDB drops are already marked done
    via `film_credit_fetches`; these need a small record of their own, since
    they are not in `films`. Offered, not yet taken up.
-5. **Analysis plugins** from the README roadmap: trends, taste, list overlap,
+3. **Analysis plugins** from the README roadmap: trends, taste, list overlap,
    ranking. When the MCP tool count passes ~15–20, consider FastMCP's
    `BM25SearchTransform` with `describe_schema` and `query` kept visible;
    until then direct listing is cheaper (output schemas, most of the ~24KB
    tool list, are not passed to the model by Claude clients).
-6. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
+4. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
    troubleshooting page (`DatabaseRecoveryError`, `DatabaseBusyError`, TMDB
    token) now; a query cookbook whose SQL runs as tests, and MCP prompts
    ("Year in review"), alongside the analysis plugins; then slim the README.
-7. **`summer setup export.zip`**, running ingest, resolve and enrich in one go
-   for a first-time user.

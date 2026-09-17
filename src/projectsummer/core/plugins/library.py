@@ -4,11 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from projectsummer.core.enrich import EnrichResult, enrich_all
+from projectsummer import config
+from projectsummer.core import progress
+from projectsummer.core.enrich import EnrichResult, MissingTokenError, enrich_all
 from projectsummer.core.ingest import IngestResult, ingest_export
 from projectsummer.core.resolve import DEFAULT_DELAY, ResolveResult, resolve_all
+from projectsummer.core.results import Result
 from projectsummer.core.sync import SyncResult, sync_feed
 from projectsummer.core.registry import plugin
+
+
+class SetupResult(Result):
+    """What each step of a first-time setup did."""
+
+    ingest: IngestResult
+    """What was imported from the export."""
+    resolve: ResolveResult
+    """Which films' TMDB ids were looked up on Letterboxd."""
+    enrich: EnrichResult
+    """What was fetched from TMDB and built."""
 
 
 @plugin(name="ingest", category="library", access="write")
@@ -123,3 +137,44 @@ def sync(username: str | None = None) -> SyncResult:
         FeedUnavailableError: If the feed cannot be fetched.
     """
     return sync_feed(username=username)
+
+
+@plugin(name="setup", category="library", access="write", open_world=True)
+def setup(export_path: Path) -> SetupResult:
+    """Build your library from a Letterboxd export in one go.
+
+    Runs ingest, resolve and enrich in turn: the whole first-time setup. For a
+    library of a thousand films expect around forty minutes, most of it
+    looking films up on Letterboxd and fetching people from TMDB. Interrupting
+    is safe, and running setup again with the same export picks up where it
+    stopped, since each step skips what is already done.
+
+    The TMDB token is checked before anything starts, so a missing one is
+    found now rather than after the Letterboxd lookups.
+
+    Args:
+        export_path: Your export .zip, or an unzipped directory containing
+            diary.csv and watchlist.csv.
+
+    Returns:
+        What each of the three steps did.
+
+    Raises:
+        MissingTokenError: If no TMDB token is configured.
+        ExportNotFoundError: If the path holds no Letterboxd CSVs.
+    """
+    if not config.tmdb_token():
+        raise MissingTokenError(
+            "No TMDB API token, which setup needs for its last step. Create a "
+            "free account at https://www.themoviedb.org/settings/api, then set "
+            "TMDB_API_KEY in your environment or in a .env file, and run "
+            "setup again."
+        )
+
+    progress.note("Step 1 of 3: importing your export")
+    imported = ingest_export(export_path)
+    progress.note("Step 2 of 3: looking up TMDB ids on Letterboxd")
+    resolved = resolve_all()
+    progress.note("Step 3 of 3: fetching metadata and people from TMDB")
+    enriched = enrich_all()
+    return SetupResult(ingest=imported, resolve=resolved, enrich=enriched)
