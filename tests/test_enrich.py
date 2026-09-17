@@ -158,8 +158,8 @@ def resolved(empty_conn, export):
 def test_enrich_populates_films(resolved):
     report = enrich_all(client=FakeClient())
 
-    assert report["enriched"] == 4
-    assert report["films_total"] == 4
+    assert report.enriched == 4
+    assert report.films_total == 4
     assert db.query("SELECT count(*) AS n FROM films WHERE enriched_at IS NOT NULL")[0]["n"] == 4
 
 
@@ -206,8 +206,8 @@ def test_watch_stats_now_derive_correctly(resolved):
 def test_diary_matches_films_by_name_and_year(resolved):
     """Diary URIs are per-viewing, so (name, year) is the only link."""
     report = enrich_all(client=FakeClient())
-    assert report["diary_entries"] == 3
-    assert report["unmatched"] == 0
+    assert report.diary_entries == 3
+    assert report.unmatched == 0
 
 
 def test_review_text_survives_into_the_diary(resolved):
@@ -224,8 +224,8 @@ def test_the_integrity_view_stays_empty(resolved):
 def test_a_film_tmdb_does_not_have_is_reported_not_fatal(resolved):
     report = enrich_all(client=FakeClient(missing={348}))
 
-    assert report["not_on_tmdb"] == 1
-    assert report["enriched"] == 3
+    assert report.not_on_tmdb == 1
+    assert report.enriched == 3
     assert db.query("SELECT count(*) AS n FROM films")[0]["n"] == 3
 
 
@@ -234,7 +234,7 @@ def test_a_second_run_fetches_nothing(resolved):
 
     again = FakeClient()
     report = enrich_all(client=again)
-    assert report["attempted"] == 0
+    assert report.attempted == 0
     assert again.requested == []
 
 
@@ -243,7 +243,7 @@ def test_limit_allows_a_trial_run(resolved):
     report = enrich_all(limit=2, client=client)
 
     assert len(client.requested) == 2
-    assert report["still_pending"] == 2
+    assert report.still_pending == 2
 
 
 def test_rebuilding_the_diary_is_idempotent(resolved):
@@ -275,6 +275,6 @@ def test_the_watchlist_picker_finally_has_something_to_pick(resolved):
     enrich_all(client=FakeClient())
     pick = random_watchlist_pick()
 
-    assert pick["tmdb_id"] == 393  # the only unwatched watchlist film
-    assert isinstance(pick["genres"], list)
-    assert pick["runtime"] == 148
+    assert pick.tmdb_id == 393  # the only unwatched watchlist film
+    assert isinstance(pick.genres, list)
+    assert pick.runtime == 148

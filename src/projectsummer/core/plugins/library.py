@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from projectsummer.core.enrich import enrich_all
-from projectsummer.core.ingest import ingest_export
-from projectsummer.core.resolve import DEFAULT_DELAY, resolve_all
-from projectsummer.core.sync import sync_feed
+from projectsummer.core.enrich import EnrichResult, enrich_all
+from projectsummer.core.ingest import IngestResult, ingest_export
+from projectsummer.core.resolve import DEFAULT_DELAY, ResolveResult, resolve_all
+from projectsummer.core.sync import SyncResult, sync_feed
 from projectsummer.core.registry import plugin
 
 
-@plugin(name="ingest", category="library")
-def ingest(export_path: Path) -> dict[str, Any]:
+@plugin(name="ingest", category="library", access="write")
+def ingest(export_path: Path) -> IngestResult:
     """Import a Letterboxd CSV export.
 
     Download your export from Letterboxd (Settings -> Data -> Export Your
@@ -33,11 +32,11 @@ def ingest(export_path: Path) -> dict[str, Any]:
     Raises:
         ExportNotFoundError: If the path holds no Letterboxd CSVs.
     """
-    return ingest_export(export_path).as_dict()
+    return ingest_export(export_path)
 
 
-@plugin(name="resolve", category="library")
-def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> dict[str, Any]:
+@plugin(name="resolve", category="library", access="write")
+def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> ResolveResult:
     """Look up the TMDB id for each imported film.
 
     A Letterboxd export contains no film ids, only boxd.it links, so each
@@ -63,8 +62,8 @@ def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> dict[str,
     return resolve_all(limit=limit, delay=delay)
 
 
-@plugin(name="enrich", category="library")
-def enrich(limit: int | None = None) -> dict[str, Any]:
+@plugin(name="enrich", category="library", access="write")
+def enrich(limit: int | None = None) -> EnrichResult:
     """Fetch film metadata from TMDB and build the queryable tables.
 
     Run this after `resolve`. It fetches cast, crew, genres, runtime and
@@ -89,8 +88,10 @@ def enrich(limit: int | None = None) -> dict[str, Any]:
     return enrich_all(limit=limit)
 
 
-@plugin(name="sync", category="library")
-def sync(username: str | None = None) -> dict[str, Any]:
+# Exposed over MCP: it only adds what Letterboxd has already published, it
+# takes seconds rather than minutes, and it is how an agent gets a fresh view.
+@plugin(name="sync", category="library", access="write", mcp=True)
+def sync(username: str | None = None) -> SyncResult:
     """Catch up with your recent Letterboxd activity.
 
     Reads your public RSS feed, which carries TMDB ids directly -- so unlike

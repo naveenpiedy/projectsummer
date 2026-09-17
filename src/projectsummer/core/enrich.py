@@ -21,6 +21,7 @@ from typing import Any
 import requests
 
 from projectsummer.core import db, progress
+from projectsummer.core.results import Result
 from projectsummer.core.errors import LetterboxdError
 
 TMDB_BASE = "https://api.themoviedb.org/3"
@@ -252,7 +253,16 @@ def apply_user_state() -> int:
     return db.query("SELECT count(*) AS n FROM films WHERE watched OR on_watchlist")[0]["n"]
 
 
-def rebuild_diary() -> dict[str, int]:
+class DiaryRebuild(Result):
+    """How much of the imported diary matched an enriched film."""
+
+    diary_entries: int
+    """Diary rows now attached to a film."""
+    unmatched: int
+    """Imported diary rows with no enriched film to attach to."""
+
+
+def rebuild_diary() -> DiaryRebuild:
     """Rebuild `diary_entries` from staging, one row per viewing.
 
     Diary URIs identify a *viewing*, not a film, and share no namespace with
@@ -289,16 +299,37 @@ def rebuild_diary() -> dict[str, int]:
 
     total = db.query("SELECT count(*) AS n FROM staging_diary")[0]["n"]
     matched = db.query("SELECT count(*) AS n FROM diary_entries")[0]["n"]
-    return {"diary_entries": matched, "unmatched": total - matched}
+    return DiaryRebuild(diary_entries=matched, unmatched=total - matched)
 
 
 # ------------------------------------------------------------------ driver
+
+class EnrichResult(Result):
+    """What an enrichment run fetched and built."""
+
+    attempted: int
+    """Films fetched from TMDB in this run."""
+    enriched: int
+    """Of those, films TMDB returned metadata for."""
+    not_on_tmdb: int
+    """Of those, films TMDB has no record of."""
+    films_total: int
+    """Films in the library after this run."""
+    with_your_data: int
+    """Films you have watched or put on your watchlist."""
+    diary_entries: int
+    """Diary rows attached to a film."""
+    unmatched: int
+    """Imported diary rows with no enriched film to attach to."""
+    still_pending: int
+    """Resolved films still waiting to be fetched."""
+
 
 def enrich_all(
     limit: int | None = None,
     token: str | None = None,
     client: TMDBClient | None = None,
-) -> dict[str, Any]:
+) -> EnrichResult:
     """Fetch metadata for everything resolved, then build the real tables.
 
     Safe to interrupt and re-run: films are written in batches as they are
@@ -337,12 +368,13 @@ def enrich_all(
     progress.note("Rebuilding diary entries")
     diary = rebuild_diary()
 
-    return {
-        "attempted": len(pending),
-        "enriched": len(pending) - len(missing),
-        "not_on_tmdb": len(missing),
-        "films_total": db.query("SELECT count(*) AS n FROM films")[0]["n"],
-        "with_your_data": watched_or_listed,
-        **diary,
-        "still_pending": len(pending_ids()),
-    }
+    return EnrichResult(
+        attempted=len(pending),
+        enriched=len(pending) - len(missing),
+        not_on_tmdb=len(missing),
+        films_total=db.query("SELECT count(*) AS n FROM films")[0]["n"],
+        with_your_data=watched_or_listed,
+        diary_entries=diary.diary_entries,
+        unmatched=diary.unmatched,
+        still_pending=len(pending_ids()),
+    )

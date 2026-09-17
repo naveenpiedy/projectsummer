@@ -197,7 +197,7 @@ def test_a_new_viewing_becomes_a_diary_entry(library):
     report = sync_feed(username="someone", xml=feed(watch_item(ALIEN_TMDB, "Alien")),
                        client=FakeClient())
 
-    assert report["new_entries"] == 1
+    assert report.new_entries == 1
     assert db.query("SELECT count(*) AS n FROM diary_entries")[0]["n"] == before + 1
 
 
@@ -218,8 +218,8 @@ def test_a_viewing_already_imported_is_not_duplicated(library):
 
     report = sync_feed(username="someone", xml=feed(item), client=FakeClient())
 
-    assert report["new_entries"] == 0
-    assert report["already_known"] == 1
+    assert report.new_entries == 0
+    assert report.already_known == 1
 
 
 def test_a_changed_rating_updates_the_existing_entry(library):
@@ -233,7 +233,7 @@ def test_a_changed_rating_updates_the_existing_entry(library):
 
     report = sync_feed(username="someone", xml=feed(item), client=FakeClient())
 
-    assert report["updated_entries"] == 1
+    assert report.updated_entries == 1
     assert db.query(
         "SELECT rating FROM diary_entries WHERE tmdb_id = ? AND watched_date = ?",
         [SHINING_TMDB, existing["watched_date"]],
@@ -245,7 +245,7 @@ def test_a_film_never_seen_before_is_fetched_and_stored(library):
     report = sync_feed(username="someone",
                        xml=feed(watch_item(NEW_FILM_TMDB, "Newcomer")), client=client)
 
-    assert report["new_films"] == 1
+    assert report.new_films == 1
     assert NEW_FILM_TMDB in client.requested
     assert db.query("SELECT count(*) AS n FROM films WHERE tmdb_id = ?",
                     [NEW_FILM_TMDB])[0]["n"] == 1
@@ -295,9 +295,9 @@ def test_syncing_twice_changes_nothing_the_second_time(library):
     first = sync_feed(username="someone", xml=xml, client=FakeClient())
     second = sync_feed(username="someone", xml=xml, client=FakeClient())
 
-    assert first["new_entries"] == 1
-    assert second["new_entries"] == 0
-    assert second["already_known"] == 1
+    assert first.new_entries == 1
+    assert second.new_entries == 0
+    assert second.already_known == 1
 
 
 def test_the_sync_is_recorded(library):
@@ -321,8 +321,8 @@ def test_watch_stats_stay_consistent_after_a_sync(library):
 
 def test_an_empty_feed_is_not_an_error(library):
     report = sync_feed(username="someone", xml=feed(""), client=FakeClient())
-    assert report["feed_items"] == 0
-    assert report["new_entries"] == 0
+    assert report.feed_items == 0
+    assert report.new_entries == 0
 
 
 def test_the_integrity_view_stays_empty_after_syncing(library):

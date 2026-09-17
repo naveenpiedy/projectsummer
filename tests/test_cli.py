@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from projectsummer.cli import _format, build_app, err_console
 from projectsummer.core import registry
+from projectsummer.core.results import Result
 
 # Rich wraps help text to the terminal width, which would make assertions
 # depend on the size of whatever terminal the suite happens to run in.
@@ -223,11 +224,16 @@ def test_a_working_plugin_beside_a_broken_one_still_reaches_the_cli(tmp_path, mo
     (tmp_path / "broken.py").write_text("not valid python\n", encoding="utf-8")
     (tmp_path / "good.py").write_text(
         "from projectsummer.core.registry import plugin\n"
+        "from projectsummer.core.results import Result\n"
+        "\n"
+        "class Greeting(Result):\n"
+        "    '''A greeting.'''\n"
+        "    text: str\n"
         "\n"
         "@plugin(category='contrib')\n"
-        "def greet(name: str = 'world') -> str:\n"
+        "def greet(name: str = 'world') -> Greeting:\n"
         "    '''Say hello.'''\n"
-        "    return f'hello {name}'\n",
+        "    return Greeting(text=f'hello {name}')\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("LETTERBOXD_PLUGIN_PATH", str(tmp_path))
@@ -255,6 +261,47 @@ def test_booleans_read_as_words():
 
 def test_dates_render_iso():
     assert _format(date(2024, 1, 10)) == "2024-01-10"
+
+
+# ------------------------------------------------------------ model results
+
+class _Row(Result):
+    """A row."""
+
+    slug: str
+    films: int
+
+
+class _Report(Result):
+    """A report with a plain field and a table."""
+
+    state: str
+    lists: list[_Row]
+
+
+_REPORT = _Report(state="ready", lists=[_Row(slug="favourites", films=2)])
+
+
+def test_a_model_renders_its_fields_and_its_rows_as_a_table():
+    from projectsummer import cli
+
+    with cli.console.capture() as captured:
+        cli._render(_REPORT, as_json=False)
+    shown = captured.get()
+
+    assert "ready" in shown
+    assert "favourites" in shown
+    assert "Slug" in shown  # a table header, not a stringified dict
+    assert "{'slug'" not in shown
+
+
+def test_a_model_as_json_is_exactly_its_schema_serialisation():
+    from projectsummer import cli
+
+    with cli.console.capture() as captured:
+        cli._render(_REPORT, as_json=True)
+
+    assert json.loads(captured.get()) == json.loads(_REPORT.model_dump_json())
 
 
 def test_an_unreadable_schema_is_a_message_not_a_traceback(tmp_path):
@@ -339,7 +386,7 @@ def test_an_existing_db_path_is_used_normally(tmp_path, export):
         db_module.close_connection()
 
     assert result.exit_code == 0
-    assert "films (imported)" in result.output
+    assert "Films imported" in result.output
 
 
 # --------------------------------------------------- serving commands block

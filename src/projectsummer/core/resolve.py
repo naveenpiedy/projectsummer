@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from projectsummer.core import db, progress
 from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.results import Result
 
 #: Sent with every request. An honest identifier is the least a scraper owes
 #: the site it reads: it lets an operator see what the traffic is and block it
@@ -200,11 +201,28 @@ def known_slug(slug: str | None) -> Identity | None:
 
 # ------------------------------------------------------------------- driver
 
+class ResolveResult(Result):
+    """What a resolution run looked up."""
+
+    attempted: int
+    """Films looked up in this run."""
+    resolved: int
+    """Films that now have a TMDB id."""
+    from_slug_cache: int
+    """Of those, films settled by a lookup already made for another link."""
+    failed: int
+    """Films whose page gave no TMDB id."""
+    still_unresolved: int
+    """Films still waiting for a lookup, including failures."""
+    failures: list[str]
+    """Up to ten failures, each as `link: reason`."""
+
+
 def resolve_all(
     limit: int | None = None,
     delay: float = DEFAULT_DELAY,
     session: requests.Session | None = None,
-) -> dict[str, Any]:
+) -> ResolveResult:
     """Resolve outstanding film URIs, returning what happened.
 
     Safe to interrupt and re-run: every result is written as it arrives, so a
@@ -245,11 +263,11 @@ def resolve_all(
         if owned_session:
             session.close()
 
-    return {
-        "attempted": len(pending),
-        "resolved": resolved,
-        "from_slug_cache": from_cache,
-        "failed": failed,
-        "still_unresolved": len(unresolved_uris()),
-        "failures": failures[:10],
-    }
+    return ResolveResult(
+        attempted=len(pending),
+        resolved=resolved,
+        from_slug_cache=from_cache,
+        failed=failed,
+        still_unresolved=len(unresolved_uris()),
+        failures=failures[:10],
+    )

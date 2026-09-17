@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 
 from projectsummer.core import db, progress
 from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.results import Result
 
 #: Namespaces Letterboxd declares on its feed.
 NAMESPACES = {
@@ -292,11 +293,28 @@ def known_film_ids(tmdb_ids: list[int]) -> set[int]:
 
 # ------------------------------------------------------------------- driver
 
+class SyncResult(Result):
+    """What the feed held, and what was new."""
+
+    username: str
+    """Whose feed was read."""
+    feed_items: int
+    """Diary entries and reviews in the feed, roughly the last fifty."""
+    new_films: int
+    """Films never seen before, fetched from TMDB."""
+    new_entries: int
+    """Diary entries added."""
+    updated_entries: int
+    """Diary entries already known whose rating, review or tags changed."""
+    already_known: int
+    """Diary entries already in the library, unchanged."""
+
+
 def sync_feed(
     username: str | None = None,
     xml: str | None = None,
     client: Any | None = None,
-) -> dict[str, Any]:
+) -> SyncResult:
     """Poll the feed and fold anything new into the library.
 
     Args:
@@ -346,14 +364,14 @@ def sync_feed(
     # film watched, or dropping a like made since the export was taken.
     _record_sync(who)
 
-    return {
-        "username": who,
-        "feed_items": len(entries),
-        "new_films": fetched,
-        "new_entries": counts["added"],
-        "updated_entries": counts["updated"],
-        "already_known": counts["unchanged"],
-    }
+    return SyncResult(
+        username=who,
+        feed_items=len(entries),
+        new_films=fetched,
+        new_entries=counts["added"],
+        updated_entries=counts["updated"],
+        already_known=counts["unchanged"],
+    )
 
 
 def _record_sync(username: str) -> None:

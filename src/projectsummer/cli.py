@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import BaseModel
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -233,16 +234,35 @@ def _render(result: Any, *, as_json: bool) -> None:
     if result is None:
         return
 
+    if isinstance(result, BaseModel):
+        if as_json:
+            # Pydantic's own serialisation, so the CLI's JSON is exactly what
+            # the output schema describes.
+            console.print_json(result.model_dump_json())
+            return
+        result = result.model_dump()
+
     if as_json:
         console.print_json(json.dumps(result, default=_json_fallback))
         return
 
     if isinstance(result, dict):
-        _render_record(result)
+        _render_mapping(result)
     elif _is_row_list(result):
         _render_rows(result)
     else:
         console.print(result)
+
+
+def _render_mapping(result: dict[str, Any]) -> None:
+    """Render a result: its plain fields as a record, each list of rows as a table."""
+    tables = {key: value for key, value in result.items() if _is_row_list(value)}
+    fields = {key: value for key, value in result.items() if key not in tables}
+
+    if fields:
+        _render_record(fields)
+    for key, rows in tables.items():
+        _render_rows(rows, title=_humanise(key) if fields or len(tables) > 1 else None)
 
 
 def _is_row_list(result: Any) -> bool:
@@ -263,9 +283,9 @@ def _render_record(record: dict[str, Any]) -> None:
     console.print(table)
 
 
-def _render_rows(rows: list[dict[str, Any]]) -> None:
+def _render_rows(rows: list[dict[str, Any]], title: str | None = None) -> None:
     """Render a list of results as a table, one row each."""
-    table = Table(header_style="bold cyan")
+    table = Table(header_style="bold cyan", title=title)
     for key in rows[0]:
         table.add_column(_humanise(key), overflow="fold")
     for row in rows:

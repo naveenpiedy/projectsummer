@@ -2,21 +2,65 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 from projectsummer.core import db
-from projectsummer.core.list_builder import ListFilters, build_list, parse_date
+from projectsummer.core.list_builder import (
+    BuiltListResult,
+    ListFilters,
+    build_list,
+    parse_date,
+)
 from projectsummer.core.errors import NoResultError
 from projectsummer.core.registry import plugin
+from projectsummer.core.results import Result
+
+
+class ListSummary(Result):
+    """One of your lists."""
+
+    slug: str
+    """Identifies the list: the export's filename, e.g. "wes-anderson-ranked"."""
+    name: str
+    """The list's title."""
+    films: int
+    """How many films it holds."""
+    ranked: bool
+    """Whether its order is a deliberate ranking. Letterboxd does not export
+    this, so it is false until set with set_list_ranked."""
+    source: Literal["letterboxd", "imported"]
+    """`letterboxd` for your own lists; `imported` for canonical lists added to
+    compare against."""
+    created_date: date | None
+    """When the list was created on Letterboxd."""
+
+
+class Lists(Result):
+    """Every list in your library."""
+
+    lists: list[ListSummary]
+    """The lists, largest first."""
+
+
+class ListRanking(Result):
+    """A list's ranked state after a change."""
+
+    slug: str
+    """The list's slug."""
+    name: str
+    """The list's title."""
+    ranked: bool
+    """Whether its positions are now treated as a ranking."""
 
 
 @plugin(name="lists", category="lists")
-def show_lists() -> list[dict[str, Any]]:
+def show_lists() -> Lists:
     """Show every list, with how many films each holds.
 
     Returns:
-        One row per list, ordered by size.
+        Every list, ordered by size.
     """
     rows = db.query(
         """
@@ -37,11 +81,11 @@ def show_lists() -> list[dict[str, Any]]:
             "No lists yet. Import a Letterboxd export, which includes any "
             "lists you have made."
         )
-    return rows
+    return Lists(lists=rows)
 
 
-@plugin(category="lists")
-def set_list_ranked(slug: str, ranked: bool = True) -> dict[str, Any]:
+@plugin(category="lists", access="write", mcp=True)
+def set_list_ranked(slug: str, ranked: bool = True) -> ListRanking:
     """Mark a list as ranked, so its positions are treated as an ordering.
 
     Letterboxd's export gives every list a Position column whether or not the
@@ -73,10 +117,12 @@ def set_list_ranked(slug: str, ranked: bool = True) -> dict[str, Any]:
         raise NoResultError(
             f"No list with slug {slug!r}. Known slugs include: {suggestions}."
         )
-    return updated[0]
+    return ListRanking(**updated[0])
 
 
-@plugin(name="list_builder", category="lists")
+# Writes a file rather than the database, but that is still a change the
+# user did not make themselves, so it is opted in explicitly.
+@plugin(name="list_builder", category="lists", access="write", mcp=True)
 def list_builder(
     output: Path,
     director: list[str] | None = None,
@@ -93,7 +139,7 @@ def list_builder(
     reverse: bool = False,
     limit: int | None = None,
     sql: str | None = None,
-) -> dict[str, Any]:
+) -> BuiltListResult:
     """Build a Letterboxd-importable list from your library.
 
     Narrow your library with filters, or give a SQL query that returns a

@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 
@@ -58,6 +58,9 @@ class SchemaVersionError(LetterboxdError):
 
 
 _SCHEMA_SQL = Path(__file__).with_name("schema.sql")
+
+#: How far through the pipeline a database has got. See :func:`library_state`.
+LibraryState = Literal["empty", "staged", "ready"]
 
 #: Settings for every read-only connection. `read_only` alone stops writes to
 #: the database, but not to the filesystem: `COPY films TO 'x.csv'` still
@@ -345,7 +348,7 @@ def database_path() -> Path | None:
         return _connection_path
 
 
-def library_state() -> str:
+def library_state() -> LibraryState:
     """How far through the pipeline this database has got.
 
     Returns:

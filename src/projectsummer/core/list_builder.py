@@ -38,6 +38,7 @@ import duckdb
 
 from projectsummer.core import db
 from projectsummer.core.errors import LetterboxdError, NoResultError
+from projectsummer.core.results import Result
 
 #: Letterboxd's documented limit is 1MB; stay safely under it.
 MAX_FILE_BYTES = 1_000_000
@@ -413,11 +414,29 @@ def write_import_files(films: list[dict[str, Any]], output: Path) -> list[Path]:
     return paths
 
 
+class BuiltListResult(Result):
+    """A list written out for Letterboxd's importer."""
+
+    films: int
+    """Films in the list."""
+    built_from: str
+    """The filters or query the list was built from."""
+    files: list[str]
+    """Files written, in import order. More than one only past the 1MB limit."""
+    first_films: list[str]
+    """Up to ten films from the top of the list, as `Title (Year)`."""
+    not_in_library: int
+    """Ids a SQL query returned that match no film in the library, and were
+    left out."""
+    note: str | None
+    """Anything to know before importing, such as how to import a split list."""
+
+
 def build_list(
     output: Path,
     filters: ListFilters | None = None,
     sql: str | None = None,
-) -> dict[str, Any]:
+) -> BuiltListResult:
     """Build a list by filters or by SQL, and write it for import."""
     filters = filters or ListFilters()
     if sql is not None and not filters.is_default():
@@ -433,17 +452,17 @@ def build_list(
         f"{film['title']} ({film['year']})" if film.get("title") else f"TMDB {film['tmdb_id']}"
         for film in built.films[:10]
     ]
-    report: dict[str, Any] = {
-        "films": len(built.films),
-        "built_from": "; ".join(built.description),
-        "files": [str(path) for path in paths],
-        "first_films": preview,
-    }
-    if built.not_in_library:
-        report["not_in_library"] = built.not_in_library
+    note = None
     if len(paths) > 1:
-        report["note"] = (
+        note = (
             "Letterboxd limits imports to 1MB, so the list is split. Import the "
             "files into the same list in order."
         )
-    return report
+    return BuiltListResult(
+        films=len(built.films),
+        built_from="; ".join(built.description),
+        files=[str(path) for path in paths],
+        first_films=preview,
+        not_in_library=built.not_in_library,
+        note=note,
+    )

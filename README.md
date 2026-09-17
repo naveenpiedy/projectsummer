@@ -144,9 +144,16 @@ Every feature is one decorated function:
 
 ```python
 from projectsummer.core.registry import plugin
+from projectsummer.core.results import Result
+
+class WatchlistPick(Result):
+    """A film picked from your watchlist."""
+
+    title: str
+    """The film's title."""
 
 @plugin(category="discovery")
-def random_watchlist_pick(genre: str | None = None) -> dict:
+def random_watchlist_pick(genre: str | None = None) -> WatchlistPick:
     """Pick a random film from your watchlist.
 
     Args:
@@ -161,6 +168,17 @@ is hand-written twice.
 Parameter names become `--options`, type hints become validation, and the
 docstring's `Args:` section becomes each option's help text. Add `--json` to
 any command for the raw result instead of a table.
+
+Every plugin returns a [Pydantic](https://docs.pydantic.dev/) model, and the
+docstring under each field describes it. Over MCP that model is the tool's
+output schema, so the registry refuses a plugin whose result says nothing
+specific — no `dict`, no `Any`, no bare `list`.
+
+A plugin also declares what it may do. `access="read"` (the default) or
+`access="write"`; read plugins are offered over MCP, write plugins only with
+`mcp=True`. Over MCP a read plugin runs on a connection DuckDB will not let
+write to the database or touch the filesystem, so the label is enforced rather
+than trusted.
 
 ### Adding your own features
 

@@ -8,6 +8,8 @@ to keep the process alive for one.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from projectsummer.core import db, registry
@@ -21,45 +23,47 @@ from projectsummer.core.plugins.lists import set_list_ranked, show_lists
 
 def test_overview_works_on_an_empty_database(empty_conn):
     """It has to be usable precisely when nothing else is."""
-    rows = overview()
-    assert {"what": "pipeline state", "count": "empty"} in rows
+    summary = overview()
+    assert summary.state == "empty"
+    assert summary.films_imported == 0
+    assert summary.first_watch is None
 
 
 def test_overview_distinguishes_imported_from_enriched(empty_conn, export):
     ingest_export(export)
-    summary = {row["what"]: row["count"] for row in overview()}
+    summary = overview()
 
-    assert summary["films (imported)"] == 4
-    assert summary["films (enriched)"] == 0
-    assert summary["pipeline state"] == "staged"
+    assert summary.films_imported == 4
+    assert summary.films_enriched == 0
+    assert summary.state == "staged"
 
 
 def test_overview_reports_the_watch_date_span(empty_conn, export):
     ingest_export(export)
-    summary = {row["what"]: row["count"] for row in overview()}
+    summary = overview()
 
-    assert summary["first logged watch"] == "2024-01-10"
-    assert summary["most recent watch"] == "2024-03-12"
+    assert summary.first_watch == date(2024, 1, 10)
+    assert summary.last_watch == date(2024, 3, 12)
 
 
 def test_overview_counts_user_state(empty_conn, export):
     ingest_export(export)
-    summary = {row["what"]: row["count"] for row in overview()}
+    summary = overview()
 
-    assert summary["  of which watched"] == 3
-    assert summary["  of which watchlist"] == 1
-    assert summary["  of which liked"] == 1
+    assert summary.watched == 3
+    assert summary.watchlist == 1
+    assert summary.liked == 1
 
 
 # ------------------------------------------------------------------- lists
 
 def test_lists_reports_sizes(empty_conn, export):
     ingest_export(export)
-    rows = show_lists()
+    lists = show_lists().lists
 
-    assert len(rows) == 1
-    assert rows[0]["slug"] == "favourites"
-    assert rows[0]["films"] == 2
+    assert len(lists) == 1
+    assert lists[0].slug == "favourites"
+    assert lists[0].films == 2
 
 
 def test_lists_on_an_empty_database_explains_itself(empty_conn):
@@ -75,21 +79,21 @@ def test_lists_on_an_empty_database_explains_itself(empty_conn):
 
 def test_lists_are_not_ranked_until_told(empty_conn, export):
     ingest_export(export)
-    assert show_lists()[0]["ranked"] is False
+    assert show_lists().lists[0].ranked is False
 
 
 def test_marking_a_list_ranked_sticks(empty_conn, export):
     ingest_export(export)
 
     result = set_list_ranked("favourites")
-    assert result["ranked"] is True
-    assert show_lists()[0]["ranked"] is True
+    assert result.ranked is True
+    assert show_lists().lists[0].ranked is True
 
 
 def test_a_list_can_be_unmarked(empty_conn, export):
     ingest_export(export)
     set_list_ranked("favourites")
-    assert set_list_ranked("favourites", ranked=False)["ranked"] is False
+    assert set_list_ranked("favourites", ranked=False).ranked is False
 
 
 def test_ranked_survives_a_reingest(empty_conn, export):
@@ -98,7 +102,7 @@ def test_ranked_survives_a_reingest(empty_conn, export):
     set_list_ranked("favourites")
 
     ingest_export(export)
-    assert show_lists()[0]["ranked"] is True
+    assert show_lists().lists[0].ranked is True
 
 
 def test_positions_are_kept_whether_or_not_a_list_is_ranked(empty_conn, export):

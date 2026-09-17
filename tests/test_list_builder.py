@@ -289,7 +289,7 @@ def test_sql_can_include_films_outside_the_library(library, tmp_path):
     """Letterboxd matches on tmdbID exactly; a title is not needed."""
     output = tmp_path / "l.csv"
     report = build_list(output, sql="SELECT 603 AS tmdb_id")
-    assert report["not_in_library"] == 1
+    assert report.not_in_library == 1
     assert read_list(output)[0]["tmdbID"] == "603"
 
 
@@ -343,9 +343,9 @@ def test_an_unenriched_library_says_so(empty_conn, tmp_path):
 
 def test_the_report_previews_the_list(library, tmp_path):
     report = build_list(tmp_path / "l.csv", filters=ListFilters(directors=("Wes Anderson",)))
-    assert report["films"] == 1
-    assert report["first_films"] == ["The Royal Tenenbaums (2001)"]
-    assert report["built_from"] == "director Wes Anderson"
+    assert report.films == 1
+    assert report.first_films == ["The Royal Tenenbaums (2001)"]
+    assert report.built_from == "director Wes Anderson"
 
 
 # ------------------------------------------------------------------ CLI

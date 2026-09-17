@@ -7,6 +7,7 @@ from typing import Any
 from projectsummer.core import db
 from projectsummer.core.errors import NoResultError
 from projectsummer.core.registry import plugin
+from projectsummer.core.results import Result
 
 #: Columns returned for a picked film. Kept in one place so every discovery
 #: plugin describes a film the same way.
@@ -23,12 +24,37 @@ _FILM_COLUMNS = """
 """
 
 
+
+class WatchlistPick(Result):
+    """A film picked from your watchlist."""
+
+    tmdb_id: int
+    """TMDB's id for the film."""
+    title: str
+    """The film's title."""
+    year: int | None
+    """Release year."""
+    runtime: int | None
+    """Running time in minutes."""
+    genres: list[str] | None
+    """TMDB genres, e.g. "Horror"."""
+    directors: list[str] | None
+    """Directors, as credited on TMDB."""
+    tmdb_rating: float | None
+    """TMDB's average user rating, out of 10."""
+    overview: str | None
+    """TMDB's plot summary."""
+    letterboxd_uri: str | None
+    """The film's Letterboxd link."""
+    candidates_considered: int
+    """How many unwatched watchlist films matched the filters."""
+
 @plugin(category="discovery")
 def random_watchlist_pick(
     genre: str | None = None,
     max_runtime: int | None = None,
     seed: int | None = None,
-) -> dict[str, Any]:
+) -> WatchlistPick:
     """Pick a random film from your watchlist.
 
     Films you have already logged are excluded, so the result is always
@@ -80,7 +106,7 @@ def random_watchlist_pick(
 
     rows = db.query(sql, params)
     if rows:
-        return rows[0]
+        return WatchlistPick(**rows[0])
 
     raise NoResultError(_describe_no_match(genre, max_runtime))
 

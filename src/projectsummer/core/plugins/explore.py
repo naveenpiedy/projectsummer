@@ -2,21 +2,70 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import date
 
 import duckdb
 
 from projectsummer.core import db
+from projectsummer.core.db import LibraryState
 from projectsummer.core.errors import LetterboxdError
 from projectsummer.core.registry import plugin
+from projectsummer.core.results import Result
 
 
 class UnavailableError(LetterboxdError):
     """Something optional could not be started."""
 
 
-@plugin(category="explore", serves=True)
-def ui(open_browser: bool = True) -> dict[str, Any]:
+class UiServer(Result):
+    """Where DuckDB's web UI is being served."""
+
+    url: str
+    """The address to open in a browser."""
+    database: str
+    """The database file the UI is attached to."""
+    state: LibraryState
+    """How far through the pipeline that database is."""
+
+
+class Overview(Result):
+    """What your library holds, and how far through the pipeline it is."""
+
+    state: LibraryState
+    """`empty`: nothing imported. `staged`: an export is imported but not yet
+    enriched, so nothing is queryable. `ready`: films are enriched."""
+    films_imported: int
+    """Films in the imported export."""
+    diary_entries_imported: int
+    """Diary rows in the imported export."""
+    resolved_identities: int
+    """Imported films whose TMDB id has been looked up."""
+    films_enriched: int
+    """Films with TMDB metadata: the queryable library."""
+    diary_entries_enriched: int
+    """Diary rows attached to an enriched film."""
+    lists: int
+    """Lists in the library."""
+    list_entries: int
+    """Films across all lists."""
+    watched: int
+    """Imported films marked watched."""
+    watchlist: int
+    """Imported films on the watchlist."""
+    liked: int
+    """Imported films liked."""
+    rated: int
+    """Imported films with a rating."""
+    first_watch: date | None
+    """The earliest watched date in the imported diary."""
+    last_watch: date | None
+    """The most recent watched date in the imported diary."""
+
+
+# "write" because loading the ui extension downloads and installs it, which a
+# read-only connection forbids.
+@plugin(category="explore", serves=True, access="write")
+def ui(open_browser: bool = True) -> UiServer:
     """Open DuckDB's built-in web UI on your library.
 
     A SQL notebook and table browser over every table and view, against the
@@ -57,51 +106,37 @@ def ui(open_browser: bool = True) -> dict[str, Any]:
 
     # get_ui_url is a table function, so it belongs in FROM, not SELECT.
     url = conn.execute("SELECT * FROM get_ui_url()").fetchone()[0]
-    return {"url": url, "database": str(db.database_path()), "state": db.library_state()}
+    return UiServer(url=url, database=str(db.database_path()), state=db.library_state())
 
 
 @plugin(category="explore")
-def overview() -> list[dict[str, Any]]:
+def overview() -> Overview:
     """Summarise what is in your library, without opening anything.
 
     Works at any stage of the pipeline, so it is also the quickest way to see
     whether an import landed and whether enrichment still needs running.
 
     Returns:
-        One row per table, with how many records it holds and what that means.
+        Counts for each stage of the pipeline, and the span of your diary.
     """
-    counts = {
-        "films (enriched)": "SELECT count(*) FROM films",
-        "diary entries (enriched)": "SELECT count(*) FROM diary_entries",
-        "films (imported)": "SELECT count(*) FROM staging_films",
-        "diary entries (imported)": "SELECT count(*) FROM staging_diary",
-        "lists": "SELECT count(*) FROM lists",
-        "list entries": "SELECT count(*) FROM list_entries",
-        "resolved identities": "SELECT count(*) FROM film_identity WHERE tmdb_id IS NOT NULL",
-    }
-    rows = [
-        {"what": label, "count": db.query(sql)[0]["count_star()"]}
-        for label, sql in counts.items()
-    ]
-
-    watched = db.query(
-        "SELECT count(*) FILTER (watched) AS watched,"
-        " count(*) FILTER (on_watchlist) AS watchlist,"
-        " count(*) FILTER (liked) AS liked,"
-        " count(*) FILTER (my_rating IS NOT NULL) AS rated"
-        " FROM staging_films"
+    counts = db.query(
+        """
+        SELECT
+            (SELECT count(*) FROM staging_films)  AS films_imported,
+            (SELECT count(*) FROM staging_diary)  AS diary_entries_imported,
+            (SELECT count(*) FROM film_identity WHERE tmdb_id IS NOT NULL)
+                                                  AS resolved_identities,
+            (SELECT count(*) FROM films)          AS films_enriched,
+            (SELECT count(*) FROM diary_entries)  AS diary_entries_enriched,
+            (SELECT count(*) FROM lists)          AS lists,
+            (SELECT count(*) FROM list_entries)   AS list_entries,
+            count(*) FILTER (watched)             AS watched,
+            count(*) FILTER (on_watchlist)        AS watchlist,
+            count(*) FILTER (liked)               AS liked,
+            count(*) FILTER (my_rating IS NOT NULL) AS rated,
+            (SELECT min(watched_date) FROM staging_diary) AS first_watch,
+            (SELECT max(watched_date) FROM staging_diary) AS last_watch
+        FROM staging_films
+        """
     )[0]
-    rows.extend(
-        {"what": f"  of which {label}", "count": value}
-        for label, value in watched.items()
-    )
-
-    span = db.query(
-        "SELECT min(watched_date) AS first, max(watched_date) AS last FROM staging_diary"
-    )[0]
-    if span["first"]:
-        rows.append({"what": "first logged watch", "count": str(span["first"])})
-        rows.append({"what": "most recent watch", "count": str(span["last"])})
-
-    rows.append({"what": "pipeline state", "count": db.library_state()})
-    return rows
+    return Overview(state=db.library_state(), **counts)

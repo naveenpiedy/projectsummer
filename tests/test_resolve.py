@@ -132,9 +132,9 @@ def test_resolves_everything_outstanding(staged):
     assert len(uris) == 4
 
     report = resolve_all(delay=0, session=FakeSession(_pages_for_all(uris)))
-    assert report["attempted"] == 4
-    assert report["resolved"] == 4
-    assert report["still_unresolved"] == 0
+    assert report.attempted == 4
+    assert report.resolved == 4
+    assert report.still_unresolved == 0
 
 
 def test_a_second_run_does_no_work(staged):
@@ -145,7 +145,7 @@ def test_a_second_run_does_no_work(staged):
     again = FakeSession({})
     report = resolve_all(delay=0, session=again)
 
-    assert report["attempted"] == 0
+    assert report.attempted == 0
     assert again.requested == [], "a resolved film must never be fetched twice"
 
 
@@ -154,8 +154,8 @@ def test_limit_allows_a_trial_run(staged):
     session = FakeSession(_pages_for_all(uris))
 
     report = resolve_all(limit=2, delay=0, session=session)
-    assert report["attempted"] == 2
-    assert report["still_unresolved"] == 2
+    assert report.attempted == 2
+    assert report.still_unresolved == 2
     assert len(session.requested) == 2
 
 
@@ -165,10 +165,10 @@ def test_failures_are_recorded_and_retried_next_time(staged):
     pages[uris[0]] = requests.Timeout("nope")
 
     report = resolve_all(delay=0, session=FakeSession(pages))
-    assert report["resolved"] == 3
-    assert report["failed"] == 1
-    assert report["still_unresolved"] == 1
-    assert any("nope" in f for f in report["failures"])
+    assert report.resolved == 3
+    assert report.failed == 1
+    assert report.still_unresolved == 1
+    assert any("nope" in f for f in report.failures)
 
     # The failure is remembered, so it can be reported rather than lost...
     stored = db.query("SELECT error FROM film_identity WHERE tmdb_id IS NULL")
@@ -185,8 +185,8 @@ def test_a_film_already_known_by_slug_is_not_fetched_again(staged):
 
     report = resolve_all(delay=0, session=FakeSession(pages))
 
-    assert report["resolved"] == 4
-    assert report["from_slug_cache"] == 3
+    assert report.resolved == 4
+    assert report.from_slug_cache == 3
     ids = {row["tmdb_id"] for row in db.query("SELECT tmdb_id FROM film_identity")}
     assert ids == {27205}
 
@@ -214,7 +214,7 @@ def test_nothing_to_do_is_not_an_error(staged):
     resolve_all(delay=0, session=session)
 
     report = resolve_all(delay=0, session=FakeSession({}))
-    assert report == {
+    assert report.model_dump() == {
         "attempted": 0, "resolved": 0, "from_slug_cache": 0,
         "failed": 0, "still_unresolved": 0, "failures": [],
     }

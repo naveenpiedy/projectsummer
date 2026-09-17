@@ -33,6 +33,7 @@ import duckdb
 
 from projectsummer.core import db
 from projectsummer.core.errors import LetterboxdError
+from projectsummer.core.results import Result
 
 #: Film-scoped exports: (source label, path within the export, has a Rating column).
 _FILM_SOURCES: tuple[tuple[str, str, bool], ...] = (
@@ -100,33 +101,28 @@ class ListExport:
     entries: list[dict[str, Any]] = field(default_factory=list)
 
 
-@dataclass(frozen=True, slots=True)
-class IngestReport:
-    """What an ingest run actually loaded."""
+class IngestResult(Result):
+    """What an import loaded."""
 
     export_dir: str
+    """The export that was read."""
     films: int
+    """Distinct films across watched, watchlist, ratings and likes."""
     diary_entries: int
+    """Diary rows, one per viewing."""
     lists: int
+    """Lists in the export."""
     list_entries: int
+    """Films across all those lists."""
     profile: str | None
-    skipped: tuple[str, ...]
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "export_dir": self.export_dir,
-            "films": self.films,
-            "diary_entries": self.diary_entries,
-            "lists": self.lists,
-            "list_entries": self.list_entries,
-            "profile": self.profile,
-            "skipped": list(self.skipped),
-        }
+    """The username the export belongs to, if it included a profile."""
+    skipped: list[str]
+    """Export files that were absent or deliberately not imported."""
 
 
 # ------------------------------------------------------------------- public
 
-def ingest_export(export_path: str | Path) -> IngestReport:
+def ingest_export(export_path: str | Path) -> IngestResult:
     """Load every CSV in a Letterboxd export into the database.
 
     Accepts either the `.zip` Letterboxd hands you or an already-unzipped
@@ -144,7 +140,7 @@ def ingest_export(export_path: str | Path) -> IngestReport:
             `diary.csv` and `watchlist.csv`.
 
     Returns:
-        An :class:`IngestReport` counting what was loaded.
+        An :class:`IngestResult` counting what was loaded.
 
     Raises:
         ExportNotFoundError: If the path is missing or holds no recognisable
@@ -167,7 +163,7 @@ def ingest_export(export_path: str | Path) -> IngestReport:
     return _ingest_directory(source, reported_as=source)
 
 
-def _ingest_directory(directory: Path, *, reported_as: Path) -> IngestReport:
+def _ingest_directory(directory: Path, *, reported_as: Path) -> IngestResult:
     """Ingest an unzipped export directory.
 
     Args:
@@ -201,14 +197,14 @@ def _ingest_directory(directory: Path, *, reported_as: Path) -> IngestReport:
             pass
         raise
 
-    return IngestReport(
+    return IngestResult(
         export_dir=str(reported_as),
         films=films,
         diary_entries=diary,
         lists=list_count,
         list_entries=entry_count,
         profile=profile,
-        skipped=tuple(skipped),
+        skipped=skipped,
     )
 
 

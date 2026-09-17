@@ -11,6 +11,12 @@ neither can drift from the other.
 
 The decorator returns the function untouched, so a plugin stays an ordinary
 function: importable, directly callable, and testable without the registry.
+
+Every plugin returns a Pydantic model, normally a
+:class:`~projectsummer.core.results.Result`. That is the contract an agent
+calling it over MCP relies on, so it is enforced here rather than left to
+convention: a plugin whose return type does not fully describe its result is
+refused at import.
 """
 
 from __future__ import annotations
@@ -23,17 +29,28 @@ import os
 import pkgutil
 import re
 import sys
+import types
+import typing
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 #: Package scanned for built-in plugins.
 BUILTIN_PACKAGE = "projectsummer.core.plugins"
 
 #: Environment variable listing extra directories to load plugins from.
 PLUGIN_PATH_ENV = "LETTERBOXD_PLUGIN_PATH"
+
+#: What a plugin may do to the library. `read` is enforced, not trusted: the
+#: MCP server runs a read plugin on a connection DuckDB will not let write to
+#: the database or touch the filesystem at all.
+Access = Literal["read", "write"]
+ACCESS_LEVELS: tuple[str, ...] = typing.get_args(Access)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +74,20 @@ class Plugin:
     #: server, say. The CLI has to keep the process alive afterwards or the
     #: thing it started dies the moment the command returns.
     serves: bool = False
+    #: `read` or `write`. See :data:`Access`.
+    access: Access = "read"
+    #: Whether the MCP server offers this plugin as a tool. Settled once, at
+    #: registration: a plugin the server does not offer is never registered
+    #: with it, so no client or prompt can reach it.
+    mcp: bool = True
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
+
+    @property
+    def result_type(self) -> type[BaseModel]:
+        """The resolved return annotation: always a Pydantic model."""
+        return self.signature.return_annotation
 
     @property
     def signature(self) -> inspect.Signature:
@@ -106,6 +134,8 @@ def plugin(
     name: str | None = None,
     category: str = "general",
     serves: bool = False,
+    access: Access = "read",
+    mcp: bool | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a function as a plugin.
 
@@ -115,20 +145,31 @@ def plugin(
         serves: Set for a plugin that starts a server or other background
             work which must outlive the call. The CLI keeps running until
             interrupted instead of exiting and tearing it down.
+        access: ``"read"`` if the plugin only reads the library, ``"write"``
+            if it changes the database, writes files, or needs anything else
+            a read-only connection forbids. Over MCP a read plugin runs on a
+            connection that cannot write, so a wrong ``"read"`` fails loudly
+            rather than quietly writing.
+        mcp: Whether the MCP server offers this plugin as a tool. Defaults to
+            yes for read plugins and no for write plugins, so exposing
+            anything that changes state is always a deliberate choice.
 
     Returns:
         A decorator that registers the function and returns it unchanged.
 
     Raises:
-        PluginError: If the name is already taken, the function has no
-            docstring, or any parameter lacks a type annotation. All three are
-            fatal for the auto-generated frontends, so they fail at import
-            time rather than producing a subtly broken CLI command or tool.
+        PluginError: If the name is already taken; the function has no
+            docstring; a parameter lacks a type annotation; the return type is
+            not a fully described Pydantic model; or a serving plugin is marked
+            for MCP. All are fatal for the auto-generated frontends, so they
+            fail at import time rather than producing a subtly broken CLI
+            command or tool.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         plugin_name = name or func.__name__
         _validate(plugin_name, func)
+        exposed = _settle_exposure(plugin_name, serves=serves, access=access, mcp=mcp)
 
         existing = _REGISTRY.get(plugin_name)
         if existing is not None and not _is_same_definition(existing.func, func):
@@ -148,10 +189,31 @@ def plugin(
             param_help=MappingProxyType(param_help),
             help_text=help_text,
             serves=serves,
+            access=access,
+            mcp=exposed,
         )
         return func
 
     return decorator
+
+
+def _settle_exposure(plugin_name: str, *, serves: bool, access: str, mcp: bool | None) -> bool:
+    """Decide once, at registration, whether MCP may offer this plugin."""
+    if access not in ACCESS_LEVELS:
+        raise PluginError(
+            f"Plugin {plugin_name!r} has access={access!r}; expected one of "
+            f"{', '.join(ACCESS_LEVELS)}."
+        )
+    if serves and mcp:
+        raise PluginError(
+            f"Plugin {plugin_name!r} starts a server that must outlive the call, "
+            f"so it cannot be offered over MCP: a tool call returns, and would "
+            f"leave the server running inside the MCP process with nobody to "
+            f"stop it."
+        )
+    if mcp is None:
+        return access == "read" and not serves
+    return mcp
 
 
 #: Docstring section headers recognised when splitting help from parameters.
@@ -250,6 +312,84 @@ def _validate(plugin_name: str, func: Callable[..., Any]) -> None:
             f"Plugin {plugin_name!r} has unannotated parameter(s): "
             f"{', '.join(unannotated)}. Type hints are the schema."
         )
+
+    _validate_result_type(plugin_name, func)
+
+
+#: Leaf types a result may contain. Each has an exact JSON representation.
+_RESULT_SCALARS: frozenset[Any] = frozenset({str, int, float, bool, type(None), date, datetime})
+
+
+def _validate_result_type(plugin_name: str, func: Callable[..., Any]) -> None:
+    """Require a return type that tells a caller exactly what comes back."""
+    try:
+        returns = inspect.signature(func, eval_str=True).return_annotation
+    except NameError as error:
+        raise PluginError(
+            f"Plugin {plugin_name!r} has a return type that cannot be resolved "
+            f"({error}). Define or import the result type at module level, "
+            f"above the function."
+        ) from None
+
+    if not (isinstance(returns, type) and issubclass(returns, BaseModel)):
+        shown = "nothing" if returns is inspect.Signature.empty else _describe(returns)
+        raise PluginError(
+            f"Plugin {plugin_name!r} returns {shown}; it must return a Pydantic "
+            f"model, normally a projectsummer.core.results.Result. Its fields "
+            f"become the tool's output schema, which is what lets an agent "
+            f"rely on the result."
+        )
+
+    problems: list[str] = []
+    _check_result_type(returns, returns.__name__, set(), problems)
+    if problems:
+        raise PluginError(
+            f"Plugin {plugin_name!r} has a result type that does not say what "
+            f"it holds: {'; '.join(problems)}. Use a model, a list[...] or "
+            f"dict[str, ...] of something specific, or a plain value."
+        )
+
+
+def _check_result_type(tp: Any, where: str, seen: set[type], problems: list[str]) -> None:
+    """Collect every part of a result type that does not describe its contents.
+
+    Pydantic accepts ``Any``, a bare ``list`` or ``dict[str, Any]`` happily,
+    and each produces a schema that tells a caller nothing. Those are exactly
+    what this rejects.
+    """
+    origin = typing.get_origin(tp)
+    args = typing.get_args(tp)
+
+    if origin is typing.Annotated:
+        _check_result_type(args[0], where, seen, problems)
+    elif tp in _RESULT_SCALARS or origin is Literal:
+        return
+    elif isinstance(tp, type) and issubclass(tp, BaseModel):
+        if tp in seen:
+            return
+        seen.add(tp)
+        if not tp.__pydantic_complete__:
+            problems.append(
+                f"{where} refers to a type that was not defined when the model was"
+            )
+            return
+        for field_name, info in tp.model_fields.items():
+            _check_result_type(info.annotation, f"{tp.__name__}.{field_name}", seen, problems)
+    elif origin in (typing.Union, types.UnionType):
+        for arg in args:
+            _check_result_type(arg, where, seen, problems)
+    elif origin is list and len(args) == 1:
+        _check_result_type(args[0], where, seen, problems)
+    elif origin is dict and len(args) == 2 and args[0] is str:
+        _check_result_type(args[1], where, seen, problems)
+    else:
+        problems.append(f"{where} is {_describe(tp)}")
+
+
+def _describe(tp: Any) -> str:
+    if isinstance(tp, type) and not typing.get_args(tp):
+        return tp.__name__
+    return str(tp).replace("typing.", "")
 
 
 def all_plugins() -> Mapping[str, Plugin]:
