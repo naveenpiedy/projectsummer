@@ -1,0 +1,42 @@
+name: Feature request
+description: Something the tool could do and does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not every good idea belongs in the built-ins. If it is a question you
+        want answered about your own library, a plugin of your own may get you
+        there today — see
+        [Writing a plugin](https://github.com/naveenpiedy/projectsummer/blob/main/docs/writing-a-plugin.md) — and
+        [the cookbook](https://github.com/naveenpiedy/projectsummer/blob/main/docs/cookbook.md) covers a lot with plain
+        SQL.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out, or do?
+      description: The question or the task, rather than the feature. It often turns out there is already a way.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: A command, a tool an assistant could call, a column, a query. A sketch of the output helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried
+      description: Queries, plugins or other tools, and where they fell short.
+
+  - type: checkboxes
+    id: schema
+    attributes:
+      label: Would this need new data?
+      options:
+        - label: I think this needs data the library does not hold yet (a new column or table, or something fetched from elsewhere).

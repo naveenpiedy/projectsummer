@@ -64,8 +64,17 @@ def test_the_example_reads_what_the_sample_library_holds(tmp_path, conn):
 
 ROOT = GUIDE.parent.parent
 
-#: Every Markdown file that ships with the project.
-PAGES = sorted([ROOT / "README.md", *(ROOT / "docs").glob("*.md")])
+#: Every Markdown file that ships with the project. The two at the root that
+#: are not the README are read by people arriving from GitHub's own prompts,
+#: so a stale link in them is the first thing a stranger sees.
+PAGES = sorted(
+    [
+        ROOT / "README.md",
+        ROOT / "CONTRIBUTING.md",
+        ROOT / "SECURITY.md",
+        *(ROOT / "docs").glob("*.md"),
+    ]
+)
 
 
 def _links(page: Path) -> list[tuple[str, str]]:

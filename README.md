@@ -161,6 +161,10 @@ TMDB rate limiting, an interruption mid-run — are exercised deliberately rathe
 than waited for. The documentation is tested too: every query in the cookbook
 and every example in the plugin guide is run.
 
+[Contributing](CONTRIBUTING.md) has the rules the code depends on, and what to
+run before opening a pull request. Security problems go through the private
+route in [SECURITY.md](SECURITY.md) rather than the issue tracker.
+
 ## Roadmap
 
 - [x] DuckDB schema and connection layer

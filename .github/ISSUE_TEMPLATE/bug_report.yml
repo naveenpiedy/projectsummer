@@ -1,0 +1,78 @@
+name: Bug report
+description: Something does not work the way it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [Troubleshooting](https://github.com/naveenpiedy/projectsummer/blob/main/docs/troubleshooting.md)
+        first — a write-ahead log that will not replay, a locked database and
+        an assistant that cannot see a tool are all covered there.
+
+        **Never paste your TMDB token.** If you already have, revoke it at
+        themoviedb.org. For a security problem, do not open an issue: see
+        [SECURITY.md](https://github.com/naveenpiedy/projectsummer/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command you ran and what came back. Paste output as text rather than a screenshot, with anything private removed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: Step by step, from a fresh database if you can. Say if it happens every time or only sometimes.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where it happened
+      options:
+        - The CLI (summer)
+        - The MCP server (summer-mcp)
+        - Both
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Output of `git rev-parse --short HEAD`, or the release tag you installed."
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      description: "For example: Windows 11, Python 3.12.4. `python --version` has the second half."
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client, if this is about the MCP server
+      description: "For example: Claude Desktop 1.2, Claude Code."
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Size of your library, whether enrichment had finished, anything unusual about your export.
