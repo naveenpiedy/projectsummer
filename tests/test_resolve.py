@@ -109,6 +109,61 @@ def test_a_network_failure_is_recorded_not_raised():
     assert "Timeout" in identity.error
 
 
+# ------------------------------------------------------------- host checks
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://boxd.it/film01",
+        "https://letterboxd.com/film/inception/",
+        "http://letterboxd.com/film/inception/",
+        "https://www.letterboxd.com/film/inception/",
+        "https://letterboxd.com./film/inception/",  # a trailing dot is the same host
+    ],
+)
+def test_letterboxd_links_are_fetchable(url):
+    assert resolve.is_letterboxd_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://localhost:8080/admin",
+        "https://letterboxd.com@example.com/",  # host is example.com
+        "https://evilletterboxd.com/",
+        "https://letterboxd.com.example.net/",
+        "file:///etc/passwd",
+        "gopher://internal:70/",
+        "",
+        "not a url",
+    ],
+)
+def test_everything_else_is_not(url):
+    assert not resolve.is_letterboxd_url(url)
+
+
+def test_a_uri_pointing_elsewhere_is_never_requested():
+    """An export is editable, and every URI in it gets fetched."""
+    session = FakeSession({})
+    identity = fetch_identity("http://169.254.169.254/latest/meta-data/", session)
+
+    assert identity.tmdb_id is None
+    assert identity.error == "not a Letterboxd link"
+    assert session.requested == []
+
+
+def test_a_redirect_off_letterboxd_is_not_read():
+    """The request was pinned to Letterboxd; whatever answered is not trusted."""
+    session = FakeSession(
+        {"https://boxd.it/f": ("https://example.com/anything/", FILM_PAGE)}
+    )
+    identity = fetch_identity("https://boxd.it/f", session)
+
+    assert identity.tmdb_id is None
+    assert identity.error == "redirected off Letterboxd"
+
+
 def test_the_user_agent_identifies_the_tool():
     """An operator should be able to see what this traffic is."""
     assert "projectsummer" in resolve.USER_AGENT
@@ -230,3 +285,20 @@ def test_nothing_to_do_is_not_an_error(staged):
         "attempted": 0, "resolved": 0, "from_slug_cache": 0,
         "failed": 0, "still_unresolved": 0, "failures": [],
     }
+
+
+def test_one_bad_uri_does_not_stop_the_rest(staged):
+    """Resolution carries on and records the refusal like any other failure."""
+    db.get_connection().execute(
+        "UPDATE staging_films SET letterboxd_uri = 'http://127.0.0.1:9/x' "
+        "WHERE letterboxd_uri = (SELECT min(letterboxd_uri) FROM staging_films)"
+    )
+    uris = resolve.unresolved_uris()
+    session = FakeSession(_pages_for_all(uris))
+
+    report = resolve_all(delay=0, session=session)
+
+    assert report.failed == 1
+    assert report.resolved == len(uris) - 1
+    assert any("not a Letterboxd link" in failure for failure in report.failures)
+    assert "http://127.0.0.1:9/x" not in session.requested

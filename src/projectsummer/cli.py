@@ -70,7 +70,7 @@ def build_app() -> typer.Typer:
     # The registry records broken plugin files rather than raising, so that one
     # of them cannot stop the tool from starting. Say so, or they vanish.
     for failure in registry.load_failures():
-        err_console.print(f"[yellow]Skipped plugin[/yellow] {failure}")
+        err_console.print(f"[yellow]Skipped plugin[/yellow] {escape(str(failure))}")
 
     return app
 
@@ -128,7 +128,7 @@ def _may_create(command_name: str | None) -> bool:
 
 def _fail(exc: LetterboxdError) -> typer.Exit:
     """Report an expected failure as a message, and exit non-zero."""
-    err_console.print(f"[red]{exc}[/red]")
+    err_console.print(f"[red]{escape(str(exc))}[/red]")
     return typer.Exit(code=1)
 
 
@@ -310,7 +310,7 @@ def _render(result: Any, *, as_json: bool) -> None:
     elif _is_row_list(result):
         _render_rows(result)
     else:
-        console.print(result)
+        console.print(escape(str(result)))
 
 
 def _render_mapping(result: dict[str, Any], title: str | None = None) -> None:
@@ -363,7 +363,7 @@ def _render_rows(rows: list[dict[str, Any]], title: str | None = None) -> None:
 
 
 def _humanise(key: str) -> str:
-    return key.replace("_", " ").capitalize()
+    return escape(key.replace("_", " ").capitalize())
 
 
 def _format(value: Any) -> str:
@@ -382,7 +382,7 @@ def _format(value: Any) -> str:
         return f"{first} ({', '.join(rest)})" if rest else first
     if isinstance(value, (date, datetime)):
         return value.isoformat()
-    return str(value)
+    return escape(str(value))
 
 
 def _serve_until_interrupted() -> None:
@@ -408,7 +408,7 @@ def main() -> None:
     except LetterboxdError as exc:
         # Backstop for anything raised while the app is being built, before
         # any command or callback could have caught it.
-        err_console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{escape(str(exc))}[/red]")
         raise SystemExit(1) from None
 
 

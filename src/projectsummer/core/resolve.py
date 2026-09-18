@@ -13,6 +13,9 @@ built to do so once per film, ever:
   link, a full link, a diary entry), and once any of them resolves, the
   others are satisfied from the slug without a request.
 * Requests are spaced by a delay and identify the tool honestly.
+* Only Letterboxd's own hosts are fetched. An export is a file like any
+  other -- it can be edited, and it can come from someone else -- and every
+  URI in it is looked up.
 * Failures are recorded rather than retried in a loop, so a second run picks
   up only what is genuinely outstanding.
 
@@ -25,6 +28,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -48,6 +52,15 @@ DEFAULT_DELAY = 0.5
 #: Give up on a single page rather than hanging the whole run.
 TIMEOUT = 15
 
+#: Hosts a film link may point at. An export is a file like any other: it can
+#: be edited, and it can come from someone else. Every URI in it is fetched,
+#: so without this check a crafted export turns resolution into a request to
+#: whatever host it names -- a cloud metadata endpoint, or a service on the
+#: user's own network -- and the failure text comes back through
+#: `ResolveResult.failures`, which an agent reads. Only Letterboxd can say
+#: what a Letterboxd film is, so anything else is refused unfetched.
+ALLOWED_HOSTS = frozenset({"letterboxd.com", "boxd.it"})
+
 
 class ResolutionError(LetterboxdError):
     """Resolution could not be carried out at all."""
@@ -64,6 +77,24 @@ class Identity:
     error: str | None = None
 
 
+def is_letterboxd_url(url: str) -> bool:
+    """Whether `url` is an http(s) link to Letterboxd, and so safe to fetch.
+
+    The host is read by `urlparse`, not by matching the text, so the usual
+    disguises do not work: in `https://letterboxd.com@example.com/`, the host
+    is example.com and this returns False.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    # A trailing dot names the same host to DNS but not to a string compare.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme in ("http", "https") and any(
+        host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_HOSTS
+    )
+
+
 def _session() -> requests.Session:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
@@ -76,6 +107,11 @@ def fetch_identity(uri: str, session: requests.Session) -> Identity:
     Kept separate from the loop below so it can be exercised without any
     network, and so the parsing rules live in one readable place.
     """
+    if not is_letterboxd_url(uri):
+        # Recorded as a failure rather than raised, so one bad row in an
+        # export cannot stop the rest of the library resolving.
+        return Identity(letterboxd_uri=uri, error="not a Letterboxd link")
+
     try:
         response = session.get(uri, timeout=TIMEOUT, allow_redirects=True)
         response.raise_for_status()
@@ -83,6 +119,12 @@ def fetch_identity(uri: str, session: requests.Session) -> Identity:
         return Identity(letterboxd_uri=uri, error=f"{type(error).__name__}: {error}")
 
     final_url = response.url
+    if not is_letterboxd_url(final_url):
+        # The request was pinned to Letterboxd, so getting here means
+        # Letterboxd itself redirected off-site. Do not read ids from
+        # whatever answered.
+        return Identity(letterboxd_uri=uri, error="redirected off Letterboxd")
+
     slug = _slug_from_url(final_url)
 
     soup = BeautifulSoup(response.content, "html.parser")

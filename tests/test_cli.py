@@ -263,6 +263,57 @@ def test_dates_render_iso():
     assert _format(date(2024, 1, 10)) == "2024-01-10"
 
 
+# --------------------------------------------------- square brackets in text
+
+# Rich reads [...] in anything it prints as styling markup. Reviews, titles
+# and list descriptions are free text, and a query names its own columns, so
+# all of them can contain brackets: unescaped, "[b]" disappears from the
+# output and "[/]" ends the command in a MarkupError.
+
+def test_bracketed_text_survives_rendering():
+    assert _format("the [b] scene ruined it") == r"the \[b] scene ruined it"
+
+
+def test_a_stray_closing_tag_renders_rather_than_raising():
+    from projectsummer import cli
+
+    with cli.console.capture() as captured:
+        cli._render([{"review": "3/5 [/] meh"}], as_json=False)
+
+    assert "3/5 [/] meh" in captured.get()
+
+
+def test_a_column_name_can_contain_brackets():
+    """A query aliases its own columns, and they become table headers."""
+    from projectsummer import cli
+
+    with cli.console.capture() as captured:
+        cli._render([{"[/]": "v"}], as_json=False)
+
+    assert "[/]" in captured.get()
+
+
+def test_an_error_message_quoting_brackets_is_still_a_message():
+    """`summer list-builder --director "[/]"` reaches _fail with that text."""
+    from projectsummer import cli
+    from projectsummer.core.errors import NoResultError
+
+    with err_console.capture() as captured:
+        cli._fail(NoResultError("No director named '[/]' in your library."))
+
+    assert "No director named '[/]' in your library." in captured.get()
+
+
+def test_json_output_is_not_escaped():
+    """Escaping is for the terminal; JSON must stay exactly what the schema says."""
+    from projectsummer import cli
+
+    with cli.console.capture() as captured:
+        cli._render([{"review": "the [b] scene"}], as_json=True)
+
+    assert json.loads(captured.get()) == [{"review": "the [b] scene"}]
+
+
 # ------------------------------------------------------------ model results
 
 class _Row(Result):
