@@ -203,6 +203,21 @@ average rating at the time, hours watched, and the genres, original languages
 (as codes: `en`, `ta`), production countries and release decades you watched
 most. `--top` sets how many of each, up to 20.
 
+To see what you rate highly and what you do not:
+
+```bash
+summer taste                          # every facet
+summer taste --facet directors --top 5
+```
+
+Your highest- and lowest-rated directors, actors, genres, release decades,
+original languages and production countries, each next to TMDB's average for
+the same films, so you can see where you differ from the crowd. Directors and
+actors are grouped by TMDB person id, so two people of one name stay apart. A
+director, genre or decade needs at least 3 rated films to appear (`--min-films`)
+and an actor at least 5 (`--actor-min-films`). It also lists the films you and
+TMDB disagree about most, ignoring films with fewer than 100 TMDB votes.
+
 For fun, rank films head to head. Pick the better of two, again and again,
 from the opening round to the final:
 
@@ -264,7 +279,7 @@ The assistant gets these tools:
 |---|---|
 | `describe_schema` | Tables, then a table's columns, then what a column holds |
 | `query` | One read-only `SELECT` |
-| `overview`, `lists`, `random_watchlist_pick`, `trends` | The same as the commands |
+| `overview`, `lists`, `random_watchlist_pick`, `trends`, `taste` | The same as the commands |
 | `sync` | Fetches your recent diary entries from Letterboxd's feed |
 | `set_list_ranked` | Marks a list as ranked |
 | `list_builder` | Writes an importable list into the output folder |
@@ -451,7 +466,8 @@ than waited for.
 - [x] Search-based tool discovery over MCP
 - [x] Trends by year and month
 - [x] Head-to-head ranking
-- [ ] Plugins: taste, list overlap
+- [x] Taste: what you rate highly, against the crowd
+- [ ] Plugins: list overlap
 
 ## Attribution and affiliation
 

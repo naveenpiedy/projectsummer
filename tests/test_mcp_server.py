@@ -93,6 +93,7 @@ EXPOSED = [
     "random_watchlist_pick",
     "set_list_ranked",
     "sync",
+    "taste",
     "trends",
 ]
 

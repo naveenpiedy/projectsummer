@@ -402,5 +402,6 @@ def test_exactly_these_builtins_are_offered_over_mcp():
         "set_list_ranked": "write",
         "sync": "write",
         "list_builder": "write",
+        "taste": "read",
         "trends": "read",
     }

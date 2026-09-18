@@ -1,4 +1,4 @@
-"""Analysis plugins: what your viewing says over time.
+"""Analysis plugins: what your viewing and your ratings say.
 
 Each answers a question an agent could also answer with `query`, but with one
 fixed definition of every figure, so the CLI and every conversation count a
@@ -205,3 +205,215 @@ def _periods(by: str, year: int | None, summary: dict[str, Any]) -> list[str]:
         return []
     years = [int(period) for period in summary]
     return [str(each) for each in range(min(years), max(years) + 1)]
+
+
+class TasteRow(Result):
+    """What you make of one director, genre, decade and so on."""
+
+    facet: Literal["directors", "actors", "genres", "decades", "languages", "countries"]
+    """What this row is."""
+    standing: Literal["highest", "lowest"]
+    """Whether it is among your highest- or lowest-rated of that facet."""
+    name: str
+    """The director, actor, genre, decade, language code or country."""
+    films: int
+    """Rated films behind the average."""
+    average_rating: float
+    """Your average rating for them, 0.5 to 5."""
+    tmdb_average: float | None
+    """TMDB's average for the same films, rescaled to your 0.5 to 5 so the two
+    can be compared. None if TMDB rates none of them."""
+    difference: float | None
+    """Your average minus TMDB's: positive where you are the kinder one."""
+
+
+class ContrarianFilm(Result):
+    """A film you and TMDB disagree about."""
+
+    tmdb_id: int
+    """TMDB's id for the film."""
+    title: str
+    """The film's title."""
+    year: int | None
+    """Release year."""
+    your_rating: float
+    """Your rating, 0.5 to 5."""
+    tmdb_rating: float
+    """TMDB's average, rescaled to your 0.5 to 5."""
+    difference: float
+    """Your rating minus TMDB's."""
+
+
+class Taste(Result):
+    """What your ratings say about you."""
+
+    rated_films: int
+    """Watched films you have rated: everything here is drawn from these."""
+    average_rating: float | None
+    """Your average rating across them."""
+    tmdb_average: float | None
+    """TMDB's average across the same films, on your scale."""
+    generosity: float | None
+    """Your average minus TMDB's. Positive means you rate above the crowd."""
+    rows: list[TasteRow]
+    """Each facet's highest-rated, best first, then its lowest-rated, worst
+    first. A row is never in both, so a facet with few values may show fewer
+    than asked for."""
+    loved_more_than_most: list[ContrarianFilm]
+    """Films you rate furthest above TMDB."""
+    liked_less_than_most: list[ContrarianFilm]
+    """Films you rate furthest below TMDB."""
+
+
+#: Rated, watched films: everything `taste` measures comes from these. TMDB's
+#: rating is halved throughout, so its 0 to 10 average can be read next to
+#: your own 0.5 to 5.
+_RATED = """
+    SELECT tmdb_id, my_rating, tmdb_rating / 2 AS crowd_rating, tmdb_vote_count,
+           title, year, genres, original_language, production_countries
+    FROM films
+    WHERE watched AND my_rating IS NOT NULL
+"""
+
+#: How each facet names a row: an expression over a rated film, or the credit
+#: role whose people it counts.
+_FACETS: dict[str, str] = {
+    "directors": "director",
+    "actors": "actor",
+    "genres": "unnest(genres)",
+    "decades": "CAST(year // 10 * 10 AS VARCHAR) || 's'",
+    "languages": "original_language",
+    "countries": "unnest(production_countries)",
+}
+
+#: Least TMDB votes a film needs before disagreeing with it means much.
+MIN_VOTES = 100
+
+
+@plugin(category="analysis")
+def taste(
+    facet: Literal[
+        "all", "directors", "actors", "genres", "decades", "languages", "countries"
+    ] = "all",
+    top: int = 3,
+    min_films: int = 3,
+    actor_min_films: int = 5,
+) -> Taste:
+    """Show what you rate highly and what you do not, and where you differ from the crowd.
+
+    Your highest- and lowest-rated directors, actors, genres, release decades,
+    original languages and production countries, each alongside TMDB's average
+    for the same films, plus the films you and TMDB disagree about most.
+
+    Ratings are your current ones on watched films, so a film rated years ago
+    counts as it stands today. TMDB's 0 to 10 average is halved everywhere, so
+    both sit on your 0.5 to 5 scale.
+
+    Args:
+        facet: One facet to show, or "all" for every one.
+        top: How many to list each way, from 1 to 20.
+        min_films: Least rated films a director, genre or decade needs to be
+            listed, so a single film cannot top a list.
+        actor_min_films: The same for actors, who are far more numerous and so
+            noisier at a low count.
+
+    Returns:
+        Each facet's highest and lowest, the films you disagree with TMDB
+        about most, and how your ratings compare with the crowd's overall.
+
+    Raises:
+        InvalidArgumentError: If top is out of range, or a minimum is below 1.
+        EmptyDatabaseError: If the library holds no films yet.
+    """
+    if not 1 <= top <= MAX_TOP:
+        raise InvalidArgumentError(f"top must be between 1 and {MAX_TOP}, not {top}.")
+    if min_films < 1 or actor_min_films < 1:
+        raise InvalidArgumentError("A minimum number of films must be at least 1.")
+    db.require_films()
+
+    overall = db.query(
+        f"""
+        SELECT count(*)                                      AS rated_films,
+               round(avg(my_rating), 2)                      AS average_rating,
+               round(avg(crowd_rating), 2)                   AS tmdb_average,
+               round(avg(my_rating) - avg(crowd_rating), 2)  AS generosity
+        FROM ({_RATED})
+        """
+    )[0]
+
+    wanted = list(_FACETS) if facet == "all" else [facet]
+    return Taste(
+        **overall,
+        rows=[
+            row
+            for name in wanted
+            for row in _facet(name, top, actor_min_films if name == "actors" else min_films)
+        ],
+        loved_more_than_most=_contrarian(top, "DESC"),
+        liked_less_than_most=_contrarian(top, "ASC"),
+    )
+
+
+def _facet(name: str, top: int, min_films: int) -> list[TasteRow]:
+    """One facet's highest and lowest, with no row appearing in both."""
+    rows = db.query(
+        f"""
+        SELECT name,
+               count(*)                                     AS films,
+               round(avg(my_rating), 2)                     AS average_rating,
+               round(avg(crowd_rating), 2)                  AS tmdb_average,
+               round(avg(my_rating) - avg(crowd_rating), 2) AS difference
+        FROM ({_source(name)})
+        WHERE name IS NOT NULL AND name <> ''
+        GROUP BY key, name
+        HAVING count(*) >= ?
+        ORDER BY average_rating DESC, films DESC, name
+        """,
+        [min_films],
+    )
+    highest = [TasteRow(facet=name, standing="highest", **row) for row in rows[:top]]
+    lowest = [TasteRow(facet=name, standing="lowest", **row) for row in reversed(rows[top:])]
+    return highest + lowest[:top]
+
+
+def _source(name: str) -> str:
+    """The rated films cut one way: one row per value, per film."""
+    expression = _FACETS[name]
+    if name not in ("directors", "actors"):
+        return (
+            f"SELECT {expression} AS key, {expression} AS name, my_rating, crowd_rating "
+            f"FROM ({_RATED})"
+        )
+    # Grouped by person_id, so two people of one name stay apart. DISTINCT
+    # because a person can hold one role twice on the same film.
+    return f"""
+        SELECT DISTINCT r.tmdb_id, p.person_id AS key, p.name AS name,
+               r.my_rating, r.crowd_rating
+        FROM ({_RATED}) r
+        JOIN film_credits c USING (tmdb_id)
+        JOIN people p USING (person_id)
+        WHERE c.role = '{expression}'
+    """
+
+
+def _contrarian(top: int, direction: str) -> list[ContrarianFilm]:
+    """The films furthest from TMDB's view, one way or the other.
+
+    Films nobody has voted on are left out: disagreeing with three strangers
+    says nothing.
+    """
+    return [
+        ContrarianFilm(**row)
+        for row in db.query(
+            f"""
+            SELECT tmdb_id, title, year, my_rating AS your_rating,
+                   round(crowd_rating, 2) AS tmdb_rating,
+                   round(my_rating - crowd_rating, 2) AS difference
+            FROM ({_RATED})
+            WHERE crowd_rating IS NOT NULL AND tmdb_vote_count >= ?
+            ORDER BY difference {direction}, tmdb_vote_count DESC
+            LIMIT ?
+            """,
+            [MIN_VOTES, top],
+        )
+    ]

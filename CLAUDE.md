@@ -156,11 +156,12 @@ far goes step by step, with a plan approved first and a pause after each step.
    counted in `still_pending`. Stored films TMDB drops are already marked done
    via `film_credit_fetches`; these need a small record of their own, since
    they are not in `films`. Offered, not yet taken up.
-3. **More analysis plugins** after `trends`: taste (highest- and
-   lowest-rated directors, genres, decades, countries, and where you differ
-   from TMDB's average) and list overlap.
-   `trends` reports original languages as ISO codes; a code-to-name mapping
-   would read better but needs a data source.
+3. **More analysis plugins** after `trends` and `taste`: list overlap.
+   Both report original languages as ISO codes; a code-to-name mapping would
+   read better but needs a data source. `taste` uses plain averages, so a
+   director with exactly `min_films` films can top one of `trends`' longer
+   careers; pulling small samples towards your overall average was discussed
+   and deferred until the results look wrong.
 4. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
    troubleshooting page (`DatabaseRecoveryError`, `DatabaseBusyError`, TMDB
    token) now; a query cookbook whose SQL runs as tests, and MCP prompts
