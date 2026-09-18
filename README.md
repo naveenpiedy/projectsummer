@@ -4,10 +4,10 @@ Query, analyse and explore your own Letterboxd data — from a CLI, or from an
 LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
 
-> **Status: early development.** The pipeline works end to end — import,
-> resolve, enrich with cast, crew and people, sync, build lists — and so does
-> the MCP server, all covered by ~490 tests. Most of the analysis plugins are
-> still to come. See [Roadmap](#roadmap).
+> **Status: complete and in use.** Import, resolve, enrich with cast, crew
+> and people, sync, lists, analysis and the MCP server all work end to end,
+> covered by ~615 tests that never touch the network. See
+> [Roadmap](#roadmap) for what that covers.
 
 ## Install
 

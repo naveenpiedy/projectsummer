@@ -9,7 +9,7 @@ for what it does; this file is about changing it safely.
 
 ```bash
 uv sync                                   # includes dev deps (pytest, FastMCP)
-uv run pytest                             # ~490 tests, ~90s, no network
+uv run pytest                             # ~615 tests, ~105s, no network
 uv run pytest tests/test_enrich.py -k people
 uv run summer --help                      # CLI, generated from the registry
 uv run summer-mcp --db PATH               # MCP server over stdio
