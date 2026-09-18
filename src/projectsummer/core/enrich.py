@@ -585,6 +585,9 @@ def pending_ids(limit: int | None = None) -> list[int]:
     again stores their credits, which is how an existing library catches up.
     That includes films `sync` brought in, which were never resolved and so
     are found through `films` rather than `film_identity`.
+
+    Films TMDB has already said it does not have are left out, however they
+    were asked for; otherwise every run would ask again for ever.
     """
     rows = db.query(
         f"""
@@ -600,11 +603,38 @@ def pending_ids(limit: int | None = None) -> list[int]:
                 SELECT 1 FROM film_credit_fetches c WHERE c.tmdb_id = f.tmdb_id
             )
         )
+        WHERE tmdb_id NOT IN (SELECT tmdb_id FROM films_not_on_tmdb)
         ORDER BY tmdb_id
         {"LIMIT " + str(int(limit)) if limit else ""}
         """
     )
     return [row["tmdb_id"] for row in rows]
+
+
+def mark_not_on_tmdb(ids: list[int]) -> None:
+    """Record films TMDB has no metadata for.
+
+    A film TMDB 404s is never stored in `films`, so nothing else remembers it
+    was asked for. Without this it comes back as pending on every run, and is
+    counted in `still_pending` for ever.
+    """
+    if not ids:
+        return
+    db.get_connection().execute(
+        """
+        INSERT INTO films_not_on_tmdb (tmdb_id, checked_at)
+        SELECT unnest(?::BIGINT[]), now()
+        ON CONFLICT (tmdb_id) DO UPDATE SET checked_at = now()
+        """,
+        [ids],
+    )
+
+
+def forget_not_on_tmdb() -> int:
+    """Forget every film TMDB said it did not have, so they are asked for again."""
+    rows = db.query("SELECT count(*) AS n FROM films_not_on_tmdb")[0]["n"]
+    db.get_connection().execute("DELETE FROM films_not_on_tmdb")
+    return rows
 
 
 def mark_credits_fetched(ids: list[int]) -> None:
@@ -752,6 +782,7 @@ def enrich_all(
     limit: int | None = None,
     token: str | None = None,
     client: TMDBClient | None = None,
+    retry_missing: bool = False,
 ) -> EnrichResult:
     """Fetch metadata for everything resolved, build the real tables, then people.
 
@@ -772,6 +803,11 @@ def enrich_all(
             )
         client = TMDBClient(token)
 
+    if retry_missing:
+        forgotten = forget_not_on_tmdb()
+        if forgotten:
+            progress.note(f"Asking again for {forgotten} films TMDB did not have")
+
     pending = pending_ids(limit)
     fetched: list[dict[str, Any]] = []
     missing: list[int] = []
@@ -787,6 +823,7 @@ def enrich_all(
 
     store_films(fetched)
     mark_credits_fetched(missing)
+    mark_not_on_tmdb(missing)
 
     progress.note("Applying your viewing data")
     watched_or_listed = apply_user_state()

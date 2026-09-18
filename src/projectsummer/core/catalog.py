@@ -47,6 +47,7 @@ INTERNAL_RELATIONS = frozenset(
         "staging_diary",
         "film_identity",
         "film_credit_fetches",
+        "films_not_on_tmdb",
         "sync_state",
         "integrity_orphans",
     }

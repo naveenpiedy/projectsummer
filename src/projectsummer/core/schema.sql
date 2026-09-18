@@ -277,6 +277,15 @@ CREATE TABLE IF NOT EXISTS film_credit_fetches (
     fetched_at  TIMESTAMP NOT NULL
 );
 
+-- Films TMDB answered 404 for. They are not in `films` -- there was nothing
+-- to store -- so only this records that they were asked for, and enrichment
+-- stops asking again on every run. `enrich --retry-missing` empties it, for
+-- the rare case of a film TMDB has since added.
+CREATE TABLE IF NOT EXISTS films_not_on_tmdb (
+    tmdb_id     BIGINT PRIMARY KEY,
+    checked_at  TIMESTAMP NOT NULL
+);
+
 -- ============================================================ views
 
 -- Dangling references, which foreign keys would have rejected outright had
@@ -454,6 +463,7 @@ COMMENT ON COLUMN film_credits.character IS 'The character played, for actors. N
 COMMENT ON COLUMN film_credits.billing_order IS 'Position in the cast list, from 0 for the lead. NULL for crew.';
 
 COMMENT ON TABLE film_credit_fetches IS 'Internal: which films have had their credits stored, so enrichment knows which still need fetching.';
+COMMENT ON TABLE films_not_on_tmdb IS 'Internal: resolved films TMDB has no record of, so enrichment stops asking for them. They are not in films.';
 COMMENT ON TABLE staging_films IS 'Internal: film data from the last imported export, before enrichment. Query films instead.';
 COMMENT ON TABLE staging_diary IS 'Internal: diary rows from the last imported export, before enrichment. Query diary_entries instead.';
 COMMENT ON TABLE film_identity IS 'Internal: cache of Letterboxd link to TMDB id lookups, so each film is looked up once.';

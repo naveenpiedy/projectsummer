@@ -711,6 +711,29 @@ def test_a_stored_film_tmdb_no_longer_has_is_not_asked_for_forever(resolved):
     assert 348 not in again.requested
 
 
+def test_a_film_tmdb_never_had_is_not_asked_for_forever(resolved):
+    """It is never stored in `films`, so only films_not_on_tmdb remembers it."""
+    report = enrich_all(client=FakeClient(missing={348}))
+    assert report.not_on_tmdb == 1
+    assert report.still_pending == 0
+
+    again = FakeClient(missing={348})
+    second = enrich_all(client=again)
+    assert 348 not in again.requested
+    assert second.attempted == 0
+
+
+def test_a_film_tmdb_never_had_can_be_asked_for_again(resolved):
+    enrich_all(client=FakeClient(missing={348}))
+
+    client = FakeClient()
+    report = enrich_all(client=client, retry_missing=True)
+
+    assert 348 in client.requested
+    assert report.enriched == 1
+    assert db.query("SELECT count(*) AS n FROM films_not_on_tmdb")[0]["n"] == 0
+
+
 def test_overview_shows_what_is_still_waiting(resolved):
     from projectsummer.core.plugins.explore import overview
 

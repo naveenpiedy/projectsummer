@@ -77,7 +77,7 @@ def resolve(limit: int | None = None, delay: float = DEFAULT_DELAY) -> ResolveRe
 
 
 @plugin(name="enrich", category="library", access="write", open_world=True)
-def enrich(limit: int | None = None) -> EnrichResult:
+def enrich(limit: int | None = None, retry_missing: bool = False) -> EnrichResult:
     """Fetch film metadata from TMDB and build the queryable tables.
 
     Run this after `resolve`. It fetches cast, crew, genres, runtime and
@@ -95,8 +95,13 @@ def enrich(limit: int | None = None) -> EnrichResult:
     Needs a TMDB API token in TMDB_API_KEY. A free account provides one at
     https://www.themoviedb.org/settings/api
 
+    A film TMDB has no record of is remembered as missing and not asked for
+    again. Pass retry_missing if you think TMDB has since added one.
+
     Args:
         limit: Only fetch this many films, and this many people, for a trial run.
+        retry_missing: Ask again for the films TMDB previously said it did not
+            have.
 
     Returns:
         Counts of what was fetched and built.
@@ -104,7 +109,7 @@ def enrich(limit: int | None = None) -> EnrichResult:
     Raises:
         MissingTokenError: If no TMDB token is configured.
     """
-    return enrich_all(limit=limit)
+    return enrich_all(limit=limit, retry_missing=retry_missing)
 
 
 # Exposed over MCP: it only adds what Letterboxd has already published, it
