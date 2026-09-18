@@ -395,6 +395,7 @@ def test_exactly_these_builtins_are_offered_over_mcp():
     offered = {name: item.access for name, item in found.items() if item.mcp}
     assert offered == {
         "describe_schema": "read",
+        "list_overlap": "read",
         "lists": "read",
         "overview": "read",
         "query": "read",

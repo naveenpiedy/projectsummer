@@ -13,6 +13,7 @@ from projectsummer.core.list_builder import (
     build_list,
     parse_date,
 )
+from projectsummer.core.catalog import InvalidArgumentError
 from projectsummer.core.errors import NoResultError
 from projectsummer.core.registry import plugin
 from projectsummer.core.results import Result
@@ -198,3 +199,173 @@ def list_builder(
         limit=limit,
     )
     return build_list(output, filters=filters, sql=sql)
+
+
+class OverlapFilm(Result):
+    """A film on one or both sides of a comparison."""
+
+    tmdb_id: int
+    """TMDB's id for the film."""
+    title: str
+    """The film's title."""
+    year: int | None
+    """Release year."""
+    your_rating: float | None
+    """Your rating, or None if you have not rated it."""
+    watched: bool
+    """Whether you have watched it."""
+
+
+class OverlapSide(Result):
+    """One side of a comparison: a list, or a set of your films."""
+
+    name: str
+    """The list's title, or what the set holds, e.g. "films you have watched"."""
+    slug: str | None
+    """The list's slug, or None for a set that is not a list."""
+    films: int
+    """Films on this side that are in your library."""
+    only_here: int
+    """Of those, films the other side does not have."""
+
+
+class ListOverlap(Result):
+    """What two sides of your library have in common."""
+
+    first: OverlapSide
+    """The list asked about."""
+    second: OverlapSide
+    """What it was compared with."""
+    shared: int
+    """Films on both sides."""
+    percent_of_first: float
+    """Share of the first side that is on both, 0 to 100."""
+    percent_of_second: float
+    """Share of the second side that is on both."""
+    shared_films: list[OverlapFilm]
+    """Some of the films on both sides, your highest-rated first."""
+    only_in_first: list[OverlapFilm]
+    """Some of the films only the first side has."""
+    only_in_second: list[OverlapFilm]
+    """Some of the films only the second side has."""
+
+
+#: Sets that can stand in for a list on either side of a comparison.
+_SETS: dict[str, tuple[str, str]] = {
+    "watched": ("films you have watched", "watched"),
+    "watchlist": ("your watchlist", "on_watchlist"),
+    "liked": ("films you have liked", "liked"),
+    "rated": ("films you have rated", "my_rating IS NOT NULL"),
+}
+
+#: Most films listed in each of the three samples.
+MAX_EXAMPLES = 50
+
+
+@plugin(category="lists")
+def list_overlap(first: str, second: str = "watched", top: int = 5) -> ListOverlap:
+    """Compare a list with another list, or with what you have watched.
+
+    Answers "how much of this list have I seen?" and "what do these two lists
+    share?". Either side may be a list's slug, as shown by `lists`, or one of
+    watched, watchlist, liked and rated.
+
+    Only films enriched into your library count, since a list row that was
+    never resolved to a TMDB id cannot be compared with anything.
+
+    Args:
+        first: The list to ask about: a slug, or watched, watchlist, liked or
+            rated.
+        second: What to compare it with. Defaults to the films you have
+            watched, which is how much of the list you have seen.
+        top: How many films to show in each of the three samples, up to 50.
+
+    Returns:
+        How many films the two sides share, how much of each that is, and
+        some films from each part.
+
+    Raises:
+        NoResultError: If a list does not exist or has no films in your
+            library.
+        InvalidArgumentError: If both sides are the same, or top is out of
+            range.
+    """
+    if not 1 <= top <= MAX_EXAMPLES:
+        raise InvalidArgumentError(f"top must be between 1 and {MAX_EXAMPLES}, not {top}.")
+    if first == second:
+        raise InvalidArgumentError("Give two different sides to compare.")
+
+    left_name, left_ids = _side(first)
+    right_name, right_ids = _side(second)
+    shared = left_ids & right_ids
+
+    return ListOverlap(
+        first=OverlapSide(
+            name=left_name, slug=None if first in _SETS else first,
+            films=len(left_ids), only_here=len(left_ids - right_ids),
+        ),
+        second=OverlapSide(
+            name=right_name, slug=None if second in _SETS else second,
+            films=len(right_ids), only_here=len(right_ids - left_ids),
+        ),
+        shared=len(shared),
+        percent_of_first=_percent(len(shared), len(left_ids)),
+        percent_of_second=_percent(len(shared), len(right_ids)),
+        shared_films=_films(shared, top),
+        only_in_first=_films(left_ids - right_ids, top),
+        only_in_second=_films(right_ids - left_ids, top),
+    )
+
+
+def _side(name: str) -> tuple[str, set[int]]:
+    """What a side is called, and the films it holds."""
+    if name in _SETS:
+        label, condition = _SETS[name]
+        rows = db.query(f"SELECT tmdb_id FROM films WHERE {condition}")
+        if not rows:
+            raise NoResultError(f"There are no {label} in your library yet.")
+        return label, {row["tmdb_id"] for row in rows}
+
+    found = db.query("SELECT list_id, name FROM lists WHERE slug = ?", [name])
+    if not found:
+        known = db.query("SELECT slug FROM lists ORDER BY slug LIMIT 10")
+        suggestions = ", ".join(row["slug"] for row in known) or "none"
+        raise NoResultError(
+            f"No list with slug {name!r}, and it is not one of "
+            f"{', '.join(_SETS)}. Known slugs include: {suggestions}."
+        )
+    rows = db.query(
+        """
+        SELECT DISTINCT e.tmdb_id
+        FROM list_entries e
+        JOIN films f USING (tmdb_id)
+        WHERE e.list_id = ?
+        """,
+        [found[0]["list_id"]],
+    )
+    if not rows:
+        raise NoResultError(
+            f"The list {name!r} holds no films that are in your library yet."
+        )
+    return found[0]["name"], {row["tmdb_id"] for row in rows}
+
+
+def _percent(part: int, whole: int) -> float:
+    return round(100 * part / whole, 1) if whole else 0.0
+
+
+def _films(ids: set[int], top: int) -> list[OverlapFilm]:
+    """A sample of films, your highest-rated first so the best are shown."""
+    return [
+        OverlapFilm(**row)
+        for row in db.query(
+            """
+            SELECT tmdb_id, title, year, my_rating AS your_rating, watched
+            FROM films
+            WHERE tmdb_id IN (SELECT unnest(?::BIGINT[]))
+            ORDER BY my_rating DESC NULLS LAST, title
+            LIMIT ?
+            """,
+            [sorted(ids), top],
+        )
+    ]

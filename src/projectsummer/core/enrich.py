@@ -655,6 +655,29 @@ def mark_credits_fetched(ids: list[int]) -> None:
     )
 
 
+def link_list_entries() -> int:
+    """Attach TMDB ids to list entries, from resolutions already made.
+
+    A Letterboxd export identifies list films by link alone, so a list entry
+    is only comparable with the rest of the library once its link has been
+    resolved. Entries whose film was never resolved keep a NULL tmdb_id.
+
+    Returns:
+        How many entries now carry an id.
+    """
+    db.get_connection().execute(
+        """
+        UPDATE list_entries e
+        SET tmdb_id = i.tmdb_id
+        FROM film_identity i
+        WHERE i.letterboxd_uri = e.letterboxd_uri
+          AND i.tmdb_id IS NOT NULL
+          AND e.tmdb_id IS DISTINCT FROM i.tmdb_id
+        """
+    )
+    return db.query("SELECT count(tmdb_id) AS n FROM list_entries")[0]["n"]
+
+
 def apply_user_state() -> int:
     """Copy watched / watchlist / liked / rating from staging onto `films`.
 
@@ -826,6 +849,7 @@ def enrich_all(
     mark_not_on_tmdb(missing)
 
     progress.note("Applying your viewing data")
+    link_list_entries()
     watched_or_listed = apply_user_state()
     progress.note("Rebuilding diary entries")
     diary = rebuild_diary()

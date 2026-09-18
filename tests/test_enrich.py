@@ -734,6 +734,35 @@ def test_a_film_tmdb_never_had_can_be_asked_for_again(resolved):
     assert db.query("SELECT count(*) AS n FROM films_not_on_tmdb")[0]["n"] == 0
 
 
+def test_list_entries_are_given_their_films(resolved):
+    """A Letterboxd export identifies list films by link alone, so without
+    this a list cannot be compared with anything in the library."""
+    before = db.query("SELECT count(tmdb_id) AS n FROM list_entries")[0]["n"]
+    enrich_all(client=FakeClient())
+
+    entries = db.query(
+        "SELECT e.name, e.tmdb_id FROM list_entries e ORDER BY e.entry_position"
+    )
+    assert before == 0
+    assert [(row["name"], row["tmdb_id"]) for row in entries] == [
+        ("The Shining", 694), ("Alien", 348)
+    ]
+
+
+def test_a_list_film_that_was_never_resolved_keeps_no_id(resolved):
+    db.get_connection().execute(
+        """
+        INSERT INTO list_entries (list_id, entry_position, name, letterboxd_uri)
+        SELECT list_id, 99, 'Unresolved', 'https://boxd.it/film99' FROM lists LIMIT 1
+        """
+    )
+    enrich_all(client=FakeClient())
+
+    assert db.query(
+        "SELECT tmdb_id FROM list_entries WHERE name = 'Unresolved'"
+    )[0]["tmdb_id"] is None
+
+
 def test_overview_shows_what_is_still_waiting(resolved):
     from projectsummer.core.plugins.explore import overview
 

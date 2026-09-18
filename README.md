@@ -203,6 +203,18 @@ average rating at the time, hours watched, and the genres, original languages
 (as codes: `en`, `ta`), production countries and release decades you watched
 most. `--top` sets how many of each, up to 20.
 
+To see how much of a list you have seen, or what two lists share:
+
+```bash
+summer list-overlap comic-book-movies              # against what you have watched
+summer list-overlap all-time-favorites --second well-made-movies
+summer list-overlap tamil-movies --second watchlist
+```
+
+Either side can be a list's slug or one of `watched`, `watchlist`, `liked`
+and `rated`. Only films resolved to a TMDB id count, so run `resolve` and
+`enrich` after importing a new export.
+
 To see what you rate highly and what you do not:
 
 ```bash
@@ -279,7 +291,7 @@ The assistant gets these tools:
 |---|---|
 | `describe_schema` | Tables, then a table's columns, then what a column holds |
 | `query` | One read-only `SELECT` |
-| `overview`, `lists`, `random_watchlist_pick`, `trends`, `taste` | The same as the commands |
+| `overview`, `lists`, `random_watchlist_pick`, `trends`, `taste`, `list_overlap` | The same as the commands |
 | `sync` | Fetches your recent diary entries from Letterboxd's feed |
 | `set_list_ranked` | Marks a list as ranked |
 | `list_builder` | Writes an importable list into the output folder |
@@ -467,7 +479,7 @@ than waited for.
 - [x] Trends by year and month
 - [x] Head-to-head ranking
 - [x] Taste: what you rate highly, against the crowd
-- [ ] Plugins: list overlap
+- [x] List overlap: how much of a list you have seen
 
 ## Attribution and affiliation
 

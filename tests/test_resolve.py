@@ -137,6 +137,18 @@ def test_resolves_everything_outstanding(staged):
     assert report.still_unresolved == 0
 
 
+def test_films_only_on_a_list_are_resolved_too(staged):
+    """A list film you have never watched has no other route to an id, and
+    without one it cannot be compared with the rest of the library."""
+    db.get_connection().execute(
+        """
+        INSERT INTO list_entries (list_id, entry_position, name, letterboxd_uri)
+        SELECT list_id, 98, 'Only Listed', 'https://boxd.it/listonly' FROM lists LIMIT 1
+        """
+    )
+    assert "https://boxd.it/listonly" in resolve.unresolved_uris()
+
+
 def test_a_second_run_does_no_work(staged):
     uris = resolve.unresolved_uris()
     session = FakeSession(_pages_for_all(uris))

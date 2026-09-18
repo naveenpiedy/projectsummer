@@ -144,14 +144,22 @@ def unresolved_uris(limit: int | None = None) -> list[str]:
 
     Excludes anything already resolved, and anything whose slug another URI
     has already resolved -- so a re-run never re-fetches settled work.
+
+    Films on your lists count too, even ones you have never watched or put on
+    your watchlist: without an id a list entry cannot be compared with
+    anything, which is what `list_overlap` and `rank` need.
     """
     rows = db.query(
         f"""
-        SELECT f.letterboxd_uri
-        FROM staging_films f
-        LEFT JOIN film_identity i ON i.letterboxd_uri = f.letterboxd_uri
-        WHERE i.tmdb_id IS NULL
-        ORDER BY f.letterboxd_uri
+        SELECT uri AS letterboxd_uri FROM (
+            SELECT letterboxd_uri AS uri FROM staging_films
+            UNION
+            SELECT letterboxd_uri FROM list_entries WHERE letterboxd_uri IS NOT NULL
+        )
+        WHERE uri NOT IN (
+            SELECT letterboxd_uri FROM film_identity WHERE tmdb_id IS NOT NULL
+        )
+        ORDER BY uri
         {"LIMIT " + str(int(limit)) if limit else ""}
         """
     )

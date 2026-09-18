@@ -87,6 +87,7 @@ async def _call(server, name, arguments=None):
 EXPOSED = [
     "describe_schema",
     "list_builder",
+    "list_overlap",
     "lists",
     "overview",
     "query",
