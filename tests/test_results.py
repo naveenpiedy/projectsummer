@@ -85,6 +85,14 @@ def test_there_are_read_plugins_to_check():
     assert {item.name for item in _READ_PLUGINS} >= {"lists", "overview", "random_watchlist_pick"}
 
 
+#: Arguments for read plugins that cannot be called bare. Without these the
+#: plugin would go unchecked, which is how a mislabelled one would slip out.
+SAMPLE_ARGUMENTS = {
+    "query": {"sql": "SELECT title FROM films"},
+    "list_overlap": {"first": "watched", "second": "watchlist"},
+}
+
+
 @pytest.mark.parametrize("item", _READ_PLUGINS, ids=lambda item: item.name)
 def test_a_read_plugin_runs_on_a_read_only_connection(item, library):
     required = [
@@ -92,12 +100,16 @@ def test_a_read_plugin_runs_on_a_read_only_connection(item, library):
         for name, parameter in item.signature.parameters.items()
         if parameter.default is parameter.empty
     ]
-    if required:
-        pytest.skip(f"needs arguments: {', '.join(required)}")
+    arguments = SAMPLE_ARGUMENTS.get(item.name, {})
+    missing = [name for name in required if name not in arguments]
+    assert not missing, (
+        f"{item.name} needs {', '.join(missing)}; add them to SAMPLE_ARGUMENTS so "
+        f"it is checked here rather than skipped."
+    )
 
     with db.session(library, read_only=True):
         try:
-            result = item.func()
+            result = item.func(**arguments)
         except LetterboxdError:
             return  # an expected, domain-level outcome; not a write attempt
         except duckdb.Error as error:

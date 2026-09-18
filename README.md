@@ -380,7 +380,8 @@ Drop a `.py` file containing decorated functions into a directory and point
 `LETTERBOXD_PLUGIN_PATH` at it. They appear in the CLI alongside the built-ins
 with no need to touch `core/`, and in the MCP server under the same rules as
 the built-ins. A file that fails to import is reported and skipped rather than
-taking the tool down with it.
+taking the tool down with it. [Writing a plugin](docs/writing-a-plugin.md) has
+the details.
 
 A plugin is ordinary Python running inside the tool, so only add plugins you
 trust: the read-only connection limits what a read plugin can do *through the
@@ -447,6 +448,14 @@ contains a film you have never logged before.
 Copy `.env.example` to `.env` and fill it in. A free TMDB account provides a
 token at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
 — take the long **Read Access Token**, not the short v3 key.
+
+## Documentation
+
+- [Writing a plugin](docs/writing-a-plugin.md) — the rules the registry
+  enforces, access and MCP exposure, progress and questions, testing.
+- [Troubleshooting](docs/troubleshooting.md) — a library that will not open, a
+  missing TMDB token, empty list comparisons, an assistant that cannot see a
+  tool.
 
 ## Development
 

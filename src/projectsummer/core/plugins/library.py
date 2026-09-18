@@ -96,7 +96,7 @@ def enrich(limit: int | None = None, retry_missing: bool = False) -> EnrichResul
     https://www.themoviedb.org/settings/api
 
     A film TMDB has no record of is remembered as missing and not asked for
-    again. Pass retry_missing if you think TMDB has since added one.
+    again, unless retry_missing says to ask once more.
 
     Args:
         limit: Only fetch this many films, and this many people, for a trial run.

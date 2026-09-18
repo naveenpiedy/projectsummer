@@ -148,21 +148,18 @@ Where the last session (2026-09-17) stopped. Nothing here is decided unless it
 says so: raise the item and agree the approach before building. The work so
 far goes step by step, with a plan approved first and a pause after each step.
 
-1. **File the DuckDB bug.** Draft and verified reproduction in
-   `docs/duckdb-wal-comment-on-column-replay.md`. Posting is public: the user
-   posts it.
-2. **Stop re-requesting films TMDB never had.** A film resolved but never
-   stored because TMDB answered 404 is fetched again on every `enrich` and
-   counted in `still_pending`. Stored films TMDB drops are already marked done
-   via `film_credit_fetches`; these need a small record of their own, since
-   they are not in `films`. Offered, not yet taken up.
-3. **More analysis plugins** after `trends` and `taste`: list overlap.
-   Both report original languages as ISO codes; a code-to-name mapping would
-   read better but needs a data source. `taste` uses plain averages, so a
-   director with exactly `min_films` films can top one of `trends`' longer
-   careers; pulling small samples towards your overall average was discussed
-   and deferred until the results look wrong.
-4. **Docs.** Options discussed, none chosen: a plugin-authoring guide and a
-   troubleshooting page (`DatabaseRecoveryError`, `DatabaseBusyError`, TMDB
-   token) now; a query cookbook whose SQL runs as tests, and MCP prompts
-   ("Year in review"), alongside the analysis plugins; then slim the README.
+1. **The DuckDB bug stays unfiled.** Decided 2026-09-18: the draft and its
+   reproduction stay in `docs/duckdb-wal-comment-on-column-replay.md` as the
+   record of why `init_schema` works the way it does. Don't offer to post it.
+2. **Language codes.** `trends` and `taste` report original languages as ISO
+   codes (`ta`, `ml`); names would read better but need a source for the
+   mapping, which nothing in the library has.
+3. **`taste` uses plain averages**, so a director with exactly `min_films`
+   films can outrank one with thirty. Pulling small samples towards your
+   overall average was discussed and deferred until the results look wrong.
+4. **Docs, part two.** `docs/writing-a-plugin.md` and
+   `docs/troubleshooting.md` exist now. Still only discussed: a query cookbook
+   whose SQL runs as tests, MCP prompts ("Year in review"), and slimming the
+   README to pitch, quickstart and links once those exist.
+5. **`rank` has never been played with live keypresses**, only with scripted
+   ones in tests and a CliRunner session against a copy of the real library.
