@@ -50,6 +50,7 @@ from typing import Annotated, Any
 import typer
 
 from projectsummer import config
+from projectsummer.prompts import PROMPTS
 from projectsummer.core import db, registry
 from projectsummer.core.errors import DatabaseBusyError, LetterboxdError, NoDatabaseError
 from projectsummer.core.registry import Plugin
@@ -300,7 +301,7 @@ def build_server(
     plugins = registry.discover() if plugins is None else plugins
 
     exposed = exposed_plugins(plugins, read_only=read_only)
-    return FastMCP(
+    server = FastMCP(
         SERVER_NAME,
         instructions=instructions(output_dir),
         version=_package_version(),
@@ -308,6 +309,14 @@ def build_server(
         transforms=[ToolDiscovery(pinned_tools(exposed))],
         mask_error_details=True,
     )
+    # Prompts are text a client offers by name, and run through the same
+    # tools as anything else. catch_up asks for sync, so it is left out of a
+    # read-only server rather than offering something that cannot work.
+    for prompt in PROMPTS:
+        if read_only and prompt.__name__ == "catch_up":
+            continue
+        server.prompt(prompt)
+    return server
 
 
 def prepare_database(database: Path) -> str | None:

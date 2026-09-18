@@ -422,3 +422,60 @@ def test_list_builder_sql_cannot_reach_files_either(library, output_dir, tmp_pat
     ))
     assert result.is_error
     assert "pretend-secret-123" not in result.content[0].text
+
+
+# ------------------------------------------------------------------ prompts
+
+OFFERED_PROMPTS = [
+    "year_in_review",
+    "what_should_i_watch",
+    "taste_profile",
+    "person_deep_dive",
+    "catch_up",
+]
+
+
+async def _prompts(server):
+    async with Client(server) as client:
+        return {prompt.name: prompt for prompt in await client.list_prompts()}
+
+
+def test_exactly_these_prompts_are_offered(library, output_dir):
+    """Pinned like the tools: a prompt reaches every conversation, so adding
+    one should be a decision."""
+    assert list(run(_prompts(serve(library, output_dir)))) == OFFERED_PROMPTS
+
+
+def test_a_prompt_describes_itself_and_its_arguments(library, output_dir):
+    prompt = run(_prompts(serve(library, output_dir)))["person_deep_dive"]
+
+    assert "director" in (prompt.description or "")
+    assert [argument.name for argument in prompt.arguments or []] == ["name"]
+
+
+def test_a_prompt_carries_what_it_was_given(library, output_dir):
+    async def rendered():
+        async with Client(serve(library, output_dir)) as client:
+            result = await client.get_prompt("year_in_review", {"year": "2025"})
+            return result.messages[0].content.text
+
+    text = run(rendered())
+    assert "2025" in text
+    assert "describe_schema" in text  # the house style reaches every prompt
+
+
+def test_an_optional_argument_can_be_left_out(library, output_dir):
+    async def rendered(arguments):
+        async with Client(serve(library, output_dir)) as client:
+            result = await client.get_prompt("what_should_i_watch", arguments)
+            return result.messages[0].content.text
+
+    assert "minutes" not in run(rendered({"mood": "something short"}))
+    assert "about 90 minutes" in run(rendered({"mood": "anything", "minutes": "90"}))
+
+
+def test_read_only_mode_leaves_out_the_prompt_that_writes(library, output_dir):
+    """catch_up asks for sync, which a read-only server does not offer."""
+    offered = run(_prompts(serve(library, output_dir, read_only=True)))
+    assert "catch_up" not in offered
+    assert "taste_profile" in offered

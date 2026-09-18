@@ -9,7 +9,7 @@ for what it does; this file is about changing it safely.
 
 ```bash
 uv sync                                   # includes dev deps (pytest, FastMCP)
-uv run pytest                             # ~615 tests, ~105s, no network
+uv run pytest                             # ~650 tests, ~105s, no network
 uv run pytest tests/test_enrich.py -k people
 uv run summer --help                      # CLI, generated from the registry
 uv run summer-mcp --db PATH               # MCP server over stdio
@@ -36,6 +36,8 @@ clients.
 | `src/projectsummer/core/credits.py` | Which cast/crew jobs are kept, and their roles |
 | `src/projectsummer/core/sync.py` | RSS feed catch-up |
 | `src/projectsummer/core/querying.py`, `catalog.py` | `query` and `describe_schema` |
+| `src/projectsummer/prompts.py` | MCP prompts: text templates, pinned by `test_mcp_server.py::OFFERED_PROMPTS` |
+| `docs/` | README links to all of it; `cookbook.md` and `writing-a-plugin.md` are run by `tests/test_cookbook.py` and `tests/test_docs.py` |
 
 ## Rules the code depends on
 
@@ -63,6 +65,13 @@ our `call_tool` refuses them, because clients decide whether to ask the user
 from a tool's own annotations. Search ranks on a tool's name, description and
 parameter descriptions, so a new plugin's docstring should use the words a
 question would.
+
+**Docs are tested.** Every SQL block in `docs/cookbook.md` runs against a
+fixture library and must return rows (except those in `MAY_BE_EMPTY`); every
+`@plugin` example in `docs/writing-a-plugin.md` is loaded as a third-party
+plugin and called; every relative link between Markdown files is resolved,
+anchors included. Change a column or move a page and those fail, which is the
+point.
 
 **Arguments needed only sometimes.** Raise `errors.MissingArgumentError` with
 the argument's name and a question (see `trends` needing `year` by month).
@@ -163,3 +172,9 @@ far goes step by step, with a plan approved first and a pause after each step.
    README to pitch, quickstart and links once those exist.
 5. **`rank` has never been played with live keypresses**, only with scripted
    ones in tests and a CliRunner session against a copy of the real library.
+6. **Future idea, not started: a diary exporter.** Turn `diary_entries` into a
+   folder of Markdown files with YAML frontmatter (film, date, rating,
+   rewatch, tags, review), for Obsidian and the like. Naveen raised it on
+   2026-09-18 as "for the future"; raise it before building.
+7. **No CI.** A workflow running `uv sync && uv run pytest` on 3.11-3.13 was
+   suggested and not taken up.
