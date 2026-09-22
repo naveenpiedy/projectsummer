@@ -6,6 +6,14 @@ films -- no personal library data is needed to exercise the code.
 
 from __future__ import annotations
 
+import os
+
+# Typer forces coloured help when GITHUB_ACTIONS, FORCE_COLOR or PY_COLORS is
+# set, and the escape codes split strings like "--genre" that the CLI tests
+# look for. It reads this switch once, at import, so it must be set before
+# anything imports Typer.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
+
 import pytest
 
 from export_fixture import write_export
