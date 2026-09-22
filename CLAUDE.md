@@ -176,5 +176,6 @@ far goes step by step, with a plan approved first and a pause after each step.
    folder of Markdown files with YAML frontmatter (film, date, rating,
    rewatch, tags, review), for Obsidian and the like. Naveen raised it on
    2026-09-18 as "for the future"; raise it before building.
-7. **No CI.** A workflow running `uv sync && uv run pytest` on 3.11-3.13 was
-   suggested and not taken up.
+7. **CI.** `.github/workflows/tests.yml` runs `uv sync --locked && uv run pytest`
+   on Ubuntu for 3.11-3.13 on every PR and push to main (added 2026-09-22).
+   Free because the repo is public.
