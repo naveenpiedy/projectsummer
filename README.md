@@ -1,5 +1,7 @@
 # Project Summer
 
+[![tests](https://github.com/naveenpiedy/projectsummer/actions/workflows/tests.yml/badge.svg)](https://github.com/naveenpiedy/projectsummer/actions/workflows/tests.yml)
+
 Query, analyse and explore your own Letterboxd data — from a CLI, or from an
 LLM agent over MCP. Both paths call the same functions, so neither can drift
 from the other.
