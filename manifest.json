@@ -1,0 +1,66 @@
+{
+  "manifest_version": "0.4",
+  "name": "projectsummer",
+  "display_name": "Project Summer",
+  "version": "2.0.0",
+  "description": "Query, analyse and explore your own Letterboxd library.",
+  "long_description": "Serves the Letterboxd library you built with the `summer` CLI to Claude: SQL over your diary, ratings, lists and the people behind each film, plus trends, taste and watchlist picks. Build the library first with `summer setup`; the extension only serves it.",
+  "author": {
+    "name": "Naveen Piedy",
+    "url": "https://github.com/naveenpiedy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/naveenpiedy/projectsummer"
+  },
+  "homepage": "https://github.com/naveenpiedy/projectsummer",
+  "documentation": "https://github.com/naveenpiedy/projectsummer/blob/main/docs/mcp.md",
+  "support": "https://github.com/naveenpiedy/projectsummer/issues",
+  "license": "MIT",
+  "keywords": ["letterboxd", "films", "movies", "duckdb"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/projectsummer/mcp_server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "--frozen", "--no-dev", "--extra", "mcp", "summer-mcp"],
+      "env": {
+        "TMDB_API_KEY": "${user_config.tmdb_api_key}",
+        "LETTERBOXD_DB": "${user_config.database}",
+        "LETTERBOXD_MCP_READ_ONLY": "${user_config.read_only}"
+      }
+    }
+  },
+  "user_config": {
+    "tmdb_api_key": {
+      "type": "string",
+      "title": "TMDB API Read Access Token",
+      "description": "Only needed for sync, when your feed has a film you have never logged before. The long Read Access Token, not the short v3 key.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "database": {
+      "type": "string",
+      "title": "Library file",
+      "description": "Path to your letterboxd.duckdb. Leave empty for the per-user data directory, where `summer setup` puts it.",
+      "required": false,
+      "default": ""
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Offer no tool that changes anything: no sync, no list building, no marking lists ranked.",
+      "required": false,
+      "default": false
+    }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}

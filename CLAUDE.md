@@ -37,6 +37,7 @@ clients.
 | `src/projectsummer/core/sync.py` | RSS feed catch-up |
 | `src/projectsummer/core/querying.py`, `catalog.py` | `query` and `describe_schema` |
 | `src/projectsummer/prompts.py` | MCP prompts: text templates, pinned by `test_mcp_server.py::OFFERED_PROMPTS` |
+| `manifest.json`, `scripts/build_mcpb.py` | Claude Desktop extension (`.mcpb`, uv runtime); keep the manifest's version equal to pyproject's — `tests/test_mcpb.py` checks |
 | `docs/` | README links to all of it; `cookbook.md` and `writing-a-plugin.md` are run by `tests/test_cookbook.py` and `tests/test_docs.py` |
 
 ## Rules the code depends on

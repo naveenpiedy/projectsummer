@@ -90,6 +90,10 @@ uv sync --extra mcp
 claude mcp add projectsummer -- uv run --directory /path/to/projectsummer --extra mcp summer-mcp
 ```
 
+For Claude Desktop, `uv run python scripts/build_mcpb.py` packs it as an
+extension (`dist/projectsummer-<version>.mcpb`) to install from Settings →
+Extensions.
+
 What an assistant can do is enforced by the server rather than left to the
 model: only the plugins marked for MCP exist at all, reading tools run on a
 connection DuckDB keeps read-only, no tool can reach your files through the

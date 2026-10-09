@@ -21,3 +21,7 @@ scrape_cache.json
 *.zip
 letterboxd-*/
 *.log
+
+# Built Claude Desktop extensions
+dist/
+*.mcpb
