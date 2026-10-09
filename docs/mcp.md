@@ -15,7 +15,23 @@ For Claude Code:
 claude mcp add projectsummer -- uv run --directory /path/to/projectsummer --extra mcp summer-mcp
 ```
 
-For Claude Desktop, add this to `claude_desktop_config.json`:
+For Claude Desktop, the simplest route is the extension. Build it from the
+repository, which needs nothing beyond what `uv sync` installed:
+
+```bash
+uv run python scripts/build_mcpb.py
+```
+
+That writes `dist/projectsummer-<version>.mcpb`. Install it from Settings →
+Extensions → Advanced settings → Install Extension, or by opening the file.
+The extension carries the source rather than its dependencies, so it needs
+[uv](https://docs.astral.sh/uv/) on your `PATH`; the first start takes a
+few seconds longer while uv builds its environment. Its settings take the
+place of `.env`: a TMDB token (only `sync` needs it), the library file if it
+is not in the default place, and a read-only switch. Build the library with
+`summer setup` first; the extension only serves it.
+
+Or add this to `claude_desktop_config.json`:
 
 ```json
 {
@@ -31,6 +47,12 @@ For Claude Desktop, add this to `claude_desktop_config.json`:
 `--directory` also makes the server find your `.env`. Add `--db PATH` to
 serve a library other than the default, or `--read-only` to offer no tool
 that changes anything.
+
+On Windows, Claude Desktop from the Microsoft Store or `winget` reads its
+config from
+`%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\`, not the
+`%APPDATA%\Claude\` file its Edit Config button opens, and rewrites it while
+running. Quit it from the system tray before editing, or use the extension.
 
 The assistant gets these tools:
 
