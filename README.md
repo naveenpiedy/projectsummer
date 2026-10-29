@@ -1,3 +1,5 @@
+![Project Summer: ask your own movie data anything.](docs/images/banner.png)
+
 # Project Summer
 
 [![tests](https://github.com/naveenpiedy/projectsummer/actions/workflows/tests.yml/badge.svg)](https://github.com/naveenpiedy/projectsummer/actions/workflows/tests.yml)
