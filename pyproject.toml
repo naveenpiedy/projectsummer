@@ -20,7 +20,7 @@ summer-mcp = "projectsummer.mcp_server:main"
 
 [project.optional-dependencies]
 mcp = [
-    "fastmcp>=4,<5",
+    "fastmcp>=4.1.2,<5",
 ]
 sync = [
     "tqdm>=4.66",
@@ -28,7 +28,7 @@ sync = [
 
 [dependency-groups]
 dev = [
-    "fastmcp>=4,<5",
+    "fastmcp>=4.1.2,<5",
     "pytest>=8.0",
 ]
 
