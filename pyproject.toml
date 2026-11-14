@@ -3,10 +3,14 @@ name = "projectsummer"
 version = "2.0.0"
 description = "Query, analyse and explore your Letterboxd data from a CLI or an LLM agent."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.5"
 license = { text = "MIT" }
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    # Not imported directly: beautifulsoup4 accepts any soupsieve, and every
+    # release before 4.0 has the descendant-combinator DoS (CVE-2026-126190).
+    # 4.0 needs Python 3.11.5, hence requires-python above.
+    "soupsieve>=4.0",
     "duckdb>=1.1",
     "pydantic>=2.13.5",
     "python-dotenv>=1.0",

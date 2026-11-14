@@ -14,7 +14,7 @@ a plugin that does something the built-ins do not.
 
 ## Getting set up
 
-Needs Python 3.11 or newer.
+Needs Python 3.11.5 or newer.
 
 ```bash
 git clone https://github.com/naveenpiedy/projectsummer
