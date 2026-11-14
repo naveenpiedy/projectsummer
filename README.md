@@ -14,7 +14,7 @@ from the other.
 
 ## Install
 
-Needs Python 3.11+.
+Needs Python 3.11.5+.
 
 ```bash
 git clone https://github.com/naveenpiedy/projectsummer
